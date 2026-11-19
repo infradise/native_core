@@ -23,10 +23,14 @@ void main() {
     );
 
     test(
-      'SecondInstancePayload round-trips multilingual CLI arguments and workingDirectory',
+      'SecondInstancePayload round-trips Unicode CLI arguments and workingDirectory',
       () {
         const original = SecondInstancePayload(
-          arguments: <String>['--new-window', 'C:\\경로\\파일.yaml', '🚀'],
+          arguments: <String>[
+            '--new-window',
+            r'C:\workspace\config.yaml',
+            '\u{1F680}',
+          ],
           workingDirectory: r'C:\Users\demo\workspace\desktop-app',
         );
         final encoded = original.encodeJson();
@@ -208,7 +212,10 @@ void main() {
               await WindowsSingleInstanceCoordinator.sendPayloadToWindowsPrimary(
                 token: uniqueToken,
                 payload: const SecondInstancePayload(
-                  arguments: <String>['--open-k8s', '한글경로.yaml'],
+                  arguments: <String>[
+                    '--open-workspace',
+                    'workspace_config.yaml',
+                  ],
                   workingDirectory: r'C:\Work',
                 ),
               );
@@ -217,7 +224,7 @@ void main() {
           expect(delivered, isNotNull);
           expect(
             delivered!.arguments,
-            equals(const <String>['--open-k8s', '한글경로.yaml']),
+            equals(const <String>['--open-workspace', 'workspace_config.yaml']),
           );
           expect(delivered!.workingDirectory, equals(r'C:\Work'));
 

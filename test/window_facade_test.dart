@@ -40,13 +40,13 @@ void main() {
         expect(events.last, isA<WindowResizedEvent>());
 
         window
-          ..title = 'Desktop App • 한국어'
+          ..title = 'Desktop App - Workspace'
           ..minimumSize = const NativeSize(600, 400)
           ..backgroundColor = const NativeColor(0xFF111618)
           ..titleBarStyle = TitleBarStyle.hidden
           ..isWindowControlButtonsVisible = false
           ..isVisibleInTaskbar = false;
-        expect(window.title, 'Desktop App • 한국어');
+        expect(window.title, 'Desktop App - Workspace');
         expect(window.minimumSize, const NativeSize(600, 400));
         expect(window.backgroundColor, const NativeColor(0xFF111618));
         expect(window.titleBarStyle, TitleBarStyle.hidden);
@@ -88,7 +88,7 @@ void main() {
     test(
       'NativeMemory encodes UTF-8 and UTF-16 strings accurately and strips embedded NULs',
       () {
-        const sample = 'Desktop\u0000 열기 ●';
+        const sample = 'Desktop\u0000 Open \u25CF';
         final utf8Bytes = NativeMemory.withUtf8CString(sample, (cstr) {
           final u8 = cstr.cast<ffi.Uint8>();
           final out = <int>[];
@@ -100,8 +100,8 @@ void main() {
           return out;
         });
         expect(utf8Bytes, isNot(contains(0)));
-        // 'Desktop 열기 ●' in UTF-8 is 18 bytes (7 ASCII + 1 space + 6 Korean + 1 space + 3 bullet)
-        expect(utf8Bytes.length, equals(18));
+        // 'Desktop Open \u25CF' in UTF-8 is 16 bytes (13 ASCII + 3-byte U+25CF)
+        expect(utf8Bytes.length, equals(16));
 
         final utf16Units = NativeMemory.withUtf16WString(sample, (wstr) {
           final out = <int>[];
@@ -112,7 +112,7 @@ void main() {
           }
           return out;
         });
-        expect(String.fromCharCodes(utf16Units), equals('Desktop 열기 ●'));
+        expect(String.fromCharCodes(utf16Units), equals('Desktop Open \u25CF'));
       },
     );
 
