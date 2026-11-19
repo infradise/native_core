@@ -1,0 +1,29 @@
+name: native_core
+description: Zero-dependency desktop window, display, and single-instance lifecycle primitives for Flutter across Linux, macOS, and Windows.
+version: 1.0.0
+homepage: https://github.com/infradise/native_core
+repository: https://github.com/infradise/native_core
+issue_tracker: https://github.com/infradise/native_core/issues
+topics:
+  - desktop
+  - window
+  - linux
+  - macos
+  - windows
+
+platforms:
+  linux:
+  macos:
+  windows:
+
+environment:
+  sdk: '>=3.7.0 <4.0.0'
+  flutter: '>=3.29.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
