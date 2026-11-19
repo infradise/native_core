@@ -86,6 +86,66 @@ bool hideLinuxNativeTitleBar(Window window) {
   }
 }
 
+/// Resolves the default seat pointer device and attaches it to a synthesized
+/// GDK event via `gdk_event_set_device`, preventing GTK/Flutter embedder
+/// `gdk_device_get_axis: assertion 'GDK_IS_DEVICE (device)' failed` criticals.
+///
+/// Returns `true` when a non-null pointer device was attached to [event].
+bool
+attachLinuxEventPointerDevice<TPointer extends Object, TEvent extends Object>({
+  required TEvent event,
+  required TPointer Function() getDefaultDisplay,
+  required TPointer Function(TPointer display) getDefaultSeat,
+  required TPointer Function(TPointer seat) getSeatPointer,
+  required void Function(TEvent event, TPointer device) setEventDevice,
+  required bool Function(TPointer ptr) isNullPointer,
+}) {
+  final display = getDefaultDisplay();
+  if (isNullPointer(display)) return false;
+
+  final seat = getDefaultSeat(display);
+  if (isNullPointer(seat)) return false;
+
+  final pointer = getSeatPointer(seat);
+  if (isNullPointer(pointer)) return false;
+
+  setEventDevice(event, pointer);
+  return true;
+}
+
+/// Internal Linux FFI probe verifying that `gdk_event_new`,
+/// `gdk_event_set_device`, `gdk_event_get_device`, and `gdk_event_free`
+/// resolve and execute cleanly against `libgdk-3.so.0`.
+///
+/// Returns `false` on non-Linux hosts or headless containers without GTK3.
+bool debugProbeLinuxSynthesizedButtonReleaseEvent() {
+  if (!Platform.isLinux) return false;
+  final gtk = LinuxGtkBindings.instance;
+  if (gtk == null) return false;
+
+  final event = gtk.gdkEventNew(kGdkButtonRelease);
+  if (event == ffi.nullptr) return false;
+  try {
+    final attached = attachLinuxEventPointerDevice<
+      ffi.Pointer<ffi.Void>,
+      ffi.Pointer<GdkEventButton>
+    >(
+      event: event,
+      getDefaultDisplay: gtk.gdkDisplayGetDefault,
+      getDefaultSeat: gtk.gdkDisplayGetDefaultSeat,
+      getSeatPointer: gtk.gdkSeatGetPointer,
+      setEventDevice: gtk.gdkEventSetDevice,
+      isNullPointer: (ptr) => ptr == ffi.nullptr,
+    );
+    if (attached) {
+      return gtk.gdkEventGetDevice(event) != ffi.nullptr;
+    }
+    return gtk.gdkEventGetDevice(event) == ffi.nullptr;
+  } finally {
+    gtk.gdkEventFree(event);
+  }
+}
+
 /// Synthesizes a `GDK_BUTTON_RELEASE` event on the Flutter `GtkEventBox` after
 /// a native window drag or system menu grab consumes the physical release
 /// event on Linux GTK3/Wayland.
@@ -114,6 +174,17 @@ void releaseLinuxMouseButtonAfterGrab(
         ..time = (gtk.gGetMonotonicTime() ~/ 1000) & 0xFFFFFFFF
         ..x = 0.0
         ..y = 0.0;
+      attachLinuxEventPointerDevice<
+        ffi.Pointer<ffi.Void>,
+        ffi.Pointer<GdkEventButton>
+      >(
+        event: event,
+        getDefaultDisplay: gtk.gdkDisplayGetDefault,
+        getDefaultSeat: gtk.gdkDisplayGetDefaultSeat,
+        getSeatPointer: gtk.gdkSeatGetPointer,
+        setEventDevice: gtk.gdkEventSetDevice,
+        isNullPointer: (ptr) => ptr == ffi.nullptr,
+      );
       gtk.gtkWidgetEvent(eventBox, event);
     } finally {
       gtk.gdkEventFree(event);

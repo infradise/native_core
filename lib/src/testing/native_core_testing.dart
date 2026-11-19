@@ -2,6 +2,10 @@
 /// for `test/` without polluting the public `pub.dev` API.
 library;
 
+export '../platform/linux/linux_headerbar_grab.dart'
+    show
+        attachLinuxEventPointerDevice,
+        debugProbeLinuxSynthesizedButtonReleaseEvent;
 export '../platform/linux/linux_window_adapter.dart'
     show LinuxSignalLifecycle, selectPrimaryLinuxToplevel;
 export '../platform/macos/macos_window_adapter.dart'

@@ -1,3 +1,8 @@
+## 1.0.1
+
+* **Linux (`GDK3`)**: Attach the default `GdkSeat` pointer device via `gdk_event_set_device` to synthesized `GDK_BUTTON_RELEASE` events inside `releaseLinuxMouseButtonAfterGrab` before dispatching `gtk_widget_event`, eliminating `Gdk-CRITICAL: gdk_device_get_axis: assertion 'GDK_IS_DEVICE (device)' failed` warnings after interactive caption-bar window dragging on Linux GTK3/Wayland and X11.
+* Added deterministic unit tests and a live Linux `libgdk-3.so.0` FFI probe verifying `gdk_event_set_device` and `gdk_event_get_device` symbol resolution and lifecycle safety.
+
 ## 1.0.0
 
 Initial stable release of **`native_core`** — a unified, zero-dependency desktop window, display, and single-instance application lifecycle package for Flutter across **Linux** (`GTK3` / `GDK3` on Wayland & X11), **macOS** (`AppKit` 13.0+), and **Windows** (`Win32`).
