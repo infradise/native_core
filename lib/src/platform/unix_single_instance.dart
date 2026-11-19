@@ -241,6 +241,30 @@ class UnixSingleInstanceCoordinator implements SingleInstanceCoordinator {
     }
   }
 
+  /// Synchronously unlinks the bound Unix domain socket file and initiates
+  /// server teardown for OS termination callbacks (such as macOS
+  /// `NSApplicationWillTerminateNotification`) where awaiting is impossible.
+  void releaseSync() {
+    final server = _server;
+    _server = null;
+    if (server != null) {
+      unawaited(server.close().then<void>((_) {}, onError: (Object _) {}));
+    }
+
+    final path = _boundSocketPath;
+    _boundSocketPath = null;
+    if (path != null) {
+      try {
+        final file = File(path);
+        if (file.existsSync()) {
+          file.deleteSync();
+        }
+      } catch (_) {
+        // Best-effort cleanup of our domain socket file on shutdown.
+      }
+    }
+  }
+
   @override
   Future<void> release() async {
     final server = _server;

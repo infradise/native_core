@@ -3,11 +3,30 @@
 library;
 
 export '../platform/linux/linux_window_adapter.dart'
-    show LinuxSignalLifecycle, selectPrimaryLinuxToplevel;
+    show
+        LinuxPresentAction,
+        LinuxSignalLifecycle,
+        resolveLinuxPresentAction,
+        selectPrimaryLinuxToplevel;
+export '../platform/macos/macos_appkit_bindings.dart'
+    show
+        debugRunMacOSWillTerminateObserverProbe,
+        kNSApplicationActivationPolicyAccessory,
+        kNSApplicationActivationPolicyProhibited,
+        kNSApplicationActivationPolicyRegular;
 export '../platform/macos/macos_window_adapter.dart'
-    show MacOSActivationPlan, resolveMacOSActivationPlan;
+    show
+        MacOSActivationPlan,
+        MacOSActivationPolicyProbeResult,
+        debugRunMacOSStatusItemActivationPolicyProbe,
+        resolveMacOSActivationPlan,
+        shouldRestoreMacOSActivationPolicyOnShow,
+        shouldSwitchMacOSActivationPolicyOnHide;
 export '../platform/macos/macos_window_delegate.dart'
-    show debugHasMacOSReplaceMethodSymbol;
+    show
+        MacOSWindowCloseProbeResult,
+        debugHasMacOSReplaceMethodSymbol,
+        debugRunMacOSWindowShouldCloseProbe;
 export '../platform/unix_single_instance.dart'
     show UnixSingleInstanceCoordinator, resolveUnixSingleInstanceSocketPath;
 export '../platform/windows/windows_frame_subclass.dart'
@@ -32,3 +51,4 @@ export '../single_instance.dart'
         SingleInstanceCoordinator,
         computeSingleInstanceHash,
         sanitizeSingleInstanceToken;
+export '../window.dart' show shouldForwardAppExitToWindowClose;

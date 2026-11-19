@@ -20,6 +20,17 @@ const int kNSEventTypeLeftMouseDown = 1;
 /// `NSEventTypeLeftMouseDragged` (`6`).
 const int kNSEventTypeLeftMouseDragged = 6;
 
+/// `NSApplicationActivationPolicyRegular` (`0`) — appears in Dock and owns a
+/// menu bar.
+const int kNSApplicationActivationPolicyRegular = 0;
+
+/// `NSApplicationActivationPolicyAccessory` (`1`) — hidden from the Dock and
+/// application switcher while keeping `NSStatusItem` menu bar icons alive.
+const int kNSApplicationActivationPolicyAccessory = 1;
+
+/// `NSApplicationActivationPolicyProhibited` (`2`).
+const int kNSApplicationActivationPolicyProhibited = 2;
+
 /// Native `NSPoint` / `CGPoint` ABI layout (`double x, double y`).
 final class MacPoint extends ffi.Struct {
   /// Horizontal coordinate in points.
@@ -58,6 +69,7 @@ class MacOSAppKitBindings {
     required this.getClassPtr,
     required this.registerNamePtr,
     required this.objectGetClass,
+    required this.classGetName,
     required this.classGetInstanceMethod,
     required this.allocateClassPair,
     required this.registerClassPair,
@@ -68,10 +80,14 @@ class MacOSAppKitBindings {
     required this.sendIdUInt,
     required this.sendVoid,
     required this.sendVoidId,
+    required this.sendVoidId3,
+    required this.sendVoidId4,
     required this.sendVoidBool,
     required this.sendVoidInt,
     required this.sendVoidUInt,
     required this.sendBool,
+    required this.sendBoolInt,
+    required this.sendInt,
     required this.sendUInt,
     required this.sendDouble,
     required this.sendRect,
@@ -93,6 +109,13 @@ class MacOSAppKitBindings {
     _attempted = true;
 
     try {
+      try {
+        ffi.DynamicLibrary.open(
+          '/System/Library/Frameworks/AppKit.framework/AppKit',
+        );
+      } catch (_) {
+        // AppKit may already be linked into the host Flutter runner.
+      }
       final objc = ffi.DynamicLibrary.open('/usr/lib/libobjc.A.dylib');
       final msgSend = objc.lookup<ffi.NativeFunction<ffi.Void Function()>>(
         'objc_msgSend',
@@ -190,6 +213,10 @@ class MacOSAppKitBindings {
           ffi.Pointer<ffi.Void> Function(ffi.Pointer<ffi.Void>),
           ffi.Pointer<ffi.Void> Function(ffi.Pointer<ffi.Void>)
         >('object_getClass'),
+        classGetName: objc.lookupFunction<
+          ffi.Pointer<ffi.Char> Function(ffi.Pointer<ffi.Void>),
+          ffi.Pointer<ffi.Char> Function(ffi.Pointer<ffi.Void>)
+        >('class_getName'),
         classGetInstanceMethod: objc.lookupFunction<
           ffi.Pointer<ffi.Void> Function(
             ffi.Pointer<ffi.Void>,
@@ -302,6 +329,35 @@ class MacOSAppKitBindings {
                   >
                 >()
                 .asFunction(),
+        sendVoidId3:
+            msgSend
+                .cast<
+                  ffi.NativeFunction<
+                    ffi.Void Function(
+                      ffi.Pointer<ffi.Void>,
+                      ffi.Pointer<ffi.Void>,
+                      ffi.Pointer<ffi.Void>,
+                      ffi.Pointer<ffi.Void>,
+                      ffi.Pointer<ffi.Void>,
+                    )
+                  >
+                >()
+                .asFunction(),
+        sendVoidId4:
+            msgSend
+                .cast<
+                  ffi.NativeFunction<
+                    ffi.Void Function(
+                      ffi.Pointer<ffi.Void>,
+                      ffi.Pointer<ffi.Void>,
+                      ffi.Pointer<ffi.Void>,
+                      ffi.Pointer<ffi.Void>,
+                      ffi.Pointer<ffi.Void>,
+                      ffi.Pointer<ffi.Void>,
+                    )
+                  >
+                >()
+                .asFunction(),
         sendVoidBool:
             msgSend
                 .cast<
@@ -343,6 +399,29 @@ class MacOSAppKitBindings {
                 .cast<
                   ffi.NativeFunction<
                     ffi.Bool Function(
+                      ffi.Pointer<ffi.Void>,
+                      ffi.Pointer<ffi.Void>,
+                    )
+                  >
+                >()
+                .asFunction(),
+        sendBoolInt:
+            msgSend
+                .cast<
+                  ffi.NativeFunction<
+                    ffi.Bool Function(
+                      ffi.Pointer<ffi.Void>,
+                      ffi.Pointer<ffi.Void>,
+                      ffi.IntPtr,
+                    )
+                  >
+                >()
+                .asFunction(),
+        sendInt:
+            msgSend
+                .cast<
+                  ffi.NativeFunction<
+                    ffi.IntPtr Function(
                       ffi.Pointer<ffi.Void>,
                       ffi.Pointer<ffi.Void>,
                     )
@@ -434,6 +513,9 @@ class MacOSAppKitBindings {
   /// `object_getClass`.
   final ffi.Pointer<ffi.Void> Function(ffi.Pointer<ffi.Void>) objectGetClass;
 
+  /// `class_getName`.
+  final ffi.Pointer<ffi.Char> Function(ffi.Pointer<ffi.Void>) classGetName;
+
   /// `class_getInstanceMethod`.
   final ffi.Pointer<ffi.Void> Function(
     ffi.Pointer<ffi.Void>,
@@ -504,6 +586,29 @@ class MacOSAppKitBindings {
   )
   sendVoidId;
 
+  /// `void (*objc_msgSend)(id, SEL, id, id, id)` (e.g.
+  /// `-[NSNotificationCenter removeObserver:name:object:]`).
+  final void Function(
+    ffi.Pointer<ffi.Void>,
+    ffi.Pointer<ffi.Void>,
+    ffi.Pointer<ffi.Void>,
+    ffi.Pointer<ffi.Void>,
+    ffi.Pointer<ffi.Void>,
+  )
+  sendVoidId3;
+
+  /// `void (*objc_msgSend)(id, SEL, id, SEL, id, id)` (e.g.
+  /// `-[NSNotificationCenter addObserver:selector:name:object:]`).
+  final void Function(
+    ffi.Pointer<ffi.Void>,
+    ffi.Pointer<ffi.Void>,
+    ffi.Pointer<ffi.Void>,
+    ffi.Pointer<ffi.Void>,
+    ffi.Pointer<ffi.Void>,
+    ffi.Pointer<ffi.Void>,
+  )
+  sendVoidId4;
+
   /// `void (*objc_msgSend)(id, SEL, BOOL)`.
   final void Function(ffi.Pointer<ffi.Void>, ffi.Pointer<ffi.Void>, bool)
   sendVoidBool;
@@ -518,6 +623,13 @@ class MacOSAppKitBindings {
 
   /// `BOOL (*objc_msgSend)(id, SEL)`.
   final bool Function(ffi.Pointer<ffi.Void>, ffi.Pointer<ffi.Void>) sendBool;
+
+  /// `BOOL (*objc_msgSend)(id, SEL, NSInteger)`.
+  final bool Function(ffi.Pointer<ffi.Void>, ffi.Pointer<ffi.Void>, int)
+  sendBoolInt;
+
+  /// `NSInteger (*objc_msgSend)(id, SEL)`.
+  final int Function(ffi.Pointer<ffi.Void>, ffi.Pointer<ffi.Void>) sendInt;
 
   /// `NSUInteger (*objc_msgSend)(id, SEL)`.
   final int Function(ffi.Pointer<ffi.Void>, ffi.Pointer<ffi.Void>) sendUInt;
@@ -648,5 +760,187 @@ class MacOSAppKitBindings {
       return displays.first.bounds.height;
     }
     return 1080.0;
+  }
+
+  /// Returns the Objective-C runtime class name for [obj], or `null` when
+  /// [obj] is `nullptr`.
+  String? dartClassName(ffi.Pointer<ffi.Void> obj) {
+    if (obj == ffi.nullptr) return null;
+    final cls = objectGetClass(obj);
+    if (cls == ffi.nullptr) return null;
+    final raw = classGetName(cls).cast<ffi.Uint8>();
+    if (raw == ffi.nullptr) return null;
+    final bytes = <int>[];
+    var i = 0;
+    while (raw[i] != 0) {
+      bytes.add(raw[i]);
+      i++;
+    }
+    return String.fromCharCodes(bytes);
+  }
+}
+
+/// Observes `NSApplicationWillTerminateNotification` on macOS using a
+/// Hot-Restart-safe Objective-C observer class (`NativeCoreAppLifecycleObserver`)
+/// so `native_core` automatically releases single-instance Unix sockets when
+/// terminated via Dock Quit or `Cmd+Q`.
+class MacOSAppLifecycleObserver {
+  MacOSAppLifecycleObserver._();
+
+  /// Process-wide singleton observer.
+  static final MacOSAppLifecycleObserver instance =
+      MacOSAppLifecycleObserver._();
+
+  final Set<void Function()> _willTerminateCallbacks = <void Function()>{};
+
+  ffi.Pointer<ffi.Void>? _observerInstance;
+  bool _registeredWithCenter = false;
+  ffi.NativeCallable<
+    ffi.Void Function(
+      ffi.Pointer<ffi.Void>,
+      ffi.Pointer<ffi.Void>,
+      ffi.Pointer<ffi.Void>,
+    )
+  >?
+  _willTerminateCallable;
+
+  /// Registers [callback] to run synchronously when macOS posts
+  /// `NSApplicationWillTerminateNotification`.
+  bool registerWillTerminate(void Function() callback) {
+    if (!Platform.isMacOS) return false;
+    _willTerminateCallbacks.add(callback);
+    return _ensureRegistered();
+  }
+
+  /// Removes a previously registered [callback].
+  void unregisterWillTerminate(void Function() callback) {
+    _willTerminateCallbacks.remove(callback);
+  }
+
+  bool _ensureRegistered() {
+    final mac = MacOSAppKitBindings.instance;
+    if (mac == null) return false;
+    try {
+      final observer = _ensureObserverInstance(mac);
+      if (observer == ffi.nullptr) return false;
+      if (_registeredWithCenter) return true;
+
+      final centerCls = mac.getClass('NSNotificationCenter');
+      if (centerCls == ffi.nullptr) return false;
+      final defaultCenter = mac.sendId(centerCls, mac.sel('defaultCenter'));
+      if (defaultCenter == ffi.nullptr) return false;
+      final noteName = mac.nsString('NSApplicationWillTerminateNotification');
+      if (noteName == ffi.nullptr) return false;
+
+      mac.sendVoidId4(
+        defaultCenter,
+        mac.sel('addObserver:selector:name:object:'),
+        observer,
+        mac.sel('onApplicationWillTerminate:'),
+        noteName,
+        ffi.nullptr,
+      );
+      _registeredWithCenter = true;
+      return true;
+    } catch (error, stackTrace) {
+      NativeCoreDiagnostics.report(
+        'MacOSAppLifecycleObserver.register',
+        error,
+        stackTrace,
+      );
+      return false;
+    }
+  }
+
+  ffi.Pointer<ffi.Void> _ensureObserverInstance(MacOSAppKitBindings mac) {
+    final existing = _observerInstance;
+    if (existing != null && existing != ffi.nullptr) return existing;
+
+    _willTerminateCallable ??= ffi.NativeCallable<
+      ffi.Void Function(
+        ffi.Pointer<ffi.Void>,
+        ffi.Pointer<ffi.Void>,
+        ffi.Pointer<ffi.Void>,
+      )
+    >.isolateLocal(_onWillTerminate);
+
+    final actionSel = mac.sel('onApplicationWillTerminate:');
+    var cls = mac.getClass('NativeCoreAppLifecycleObserver');
+    if (cls == ffi.nullptr) {
+      final nsObject = mac.getClass('NSObject');
+      cls = NativeMemory.withUtf8CString(
+        'NativeCoreAppLifecycleObserver',
+        (name) => mac.allocateClassPair(nsObject, name, 0),
+      );
+      NativeMemory.withUtf8CString('v@:@', (types) {
+        mac.addMethod(
+          cls,
+          actionSel,
+          _willTerminateCallable!.nativeFunction.cast(),
+          types,
+        );
+      });
+      mac.registerClassPair(cls);
+    } else {
+      NativeMemory.withUtf8CString('v@:@', (types) {
+        mac.replaceMethod(
+          cls,
+          actionSel,
+          _willTerminateCallable!.nativeFunction.cast(),
+          types,
+        );
+      });
+    }
+
+    return _observerInstance = mac.sendId(
+      mac.sendId(cls, mac.sel('alloc')),
+      mac.sel('init'),
+    );
+  }
+
+  static void _onWillTerminate(
+    ffi.Pointer<ffi.Void> self,
+    ffi.Pointer<ffi.Void> cmd,
+    ffi.Pointer<ffi.Void> notification,
+  ) {
+    final snapshot = List<void Function()>.of(instance._willTerminateCallbacks);
+    for (final callback in snapshot) {
+      try {
+        callback();
+      } catch (error, stackTrace) {
+        NativeCoreDiagnostics.report(
+          'MacOSAppLifecycleObserver.willTerminate',
+          error,
+          stackTrace,
+        );
+      }
+    }
+  }
+}
+
+/// Live macOS FFI probe verifying that `NativeCoreAppLifecycleObserver`
+/// registers on `NSNotificationCenter.defaultCenter` and dispatches registered
+/// termination callbacks through Objective-C `objc_msgSend`.
+bool debugRunMacOSWillTerminateObserverProbe() {
+  if (!Platform.isMacOS) return false;
+  final mac = MacOSAppKitBindings.instance;
+  if (mac == null) return false;
+
+  var invoked = false;
+  void onTerminate() {
+    invoked = true;
+  }
+
+  final observer = MacOSAppLifecycleObserver.instance;
+  final registered = observer.registerWillTerminate(onTerminate);
+  try {
+    final target = observer._observerInstance;
+    if (!registered || target == null || target == ffi.nullptr) {
+      return false;
+    }
+    mac.sendVoidId(target, mac.sel('onApplicationWillTerminate:'), ffi.nullptr);
+    return invoked;
+  } finally {
+    observer.unregisterWillTerminate(onTerminate);
   }
 }

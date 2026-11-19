@@ -1,4 +1,5 @@
 import 'dart:ffi' as ffi;
+import 'dart:io';
 
 import 'package:flutter/widgets.dart' show WidgetsBinding;
 
@@ -7,6 +8,185 @@ import '../../models.dart';
 import '../window_adapter.dart';
 import 'macos_appkit_bindings.dart';
 import 'macos_window_delegate.dart';
+
+/// Resolves whether `MacOSWindowAdapter.hide()` should switch `NSApplication`
+/// from `Regular (0)` to `Accessory (1)` so the Dock running indicator dot
+/// disappears while a menu bar `NSStatusItem` remains active (matching macOS
+/// menu-bar apps such as Docker Desktop and Rancher Desktop).
+bool shouldSwitchMacOSActivationPolicyOnHide({
+  required bool hasActiveStatusItem,
+  required bool hasOtherVisibleAppWindow,
+  required bool isVisibleInTaskbar,
+}) {
+  return isVisibleInTaskbar && hasActiveStatusItem && !hasOtherVisibleAppWindow;
+}
+
+/// Resolves whether `MacOSWindowAdapter.show()` / `focus()` / reopen should
+/// switch `NSApplication` back to `Regular (0)` before activating the window so
+/// the Dock running indicator dot and application menu bar reappear.
+bool shouldRestoreMacOSActivationPolicyOnShow({
+  required bool switchedToAccessoryOnHide,
+  required bool isVisibleInTaskbar,
+  required int currentActivationPolicy,
+}) {
+  if (switchedToAccessoryOnHide) return true;
+  return isVisibleInTaskbar &&
+      currentActivationPolicy != kNSApplicationActivationPolicyRegular;
+}
+
+bool _isStatusBarWindow(MacOSAppKitBindings mac, ffi.Pointer<ffi.Void> win) {
+  if (win == ffi.nullptr) return false;
+  return mac.dartClassName(win) == 'NSStatusBarWindow';
+}
+
+bool _hasActiveStatusBarItem(
+  MacOSAppKitBindings mac,
+  ffi.Pointer<ffi.Void> sharedApp,
+) {
+  if (sharedApp == ffi.nullptr) return false;
+  final windows = mac.sendId(sharedApp, mac.sel('windows'));
+  if (windows == ffi.nullptr) return false;
+  final count = mac.sendUInt(windows, mac.sel('count'));
+  final selAt = mac.sel('objectAtIndex:');
+  final selVisible = mac.sel('isVisible');
+  for (var i = 0; i < count; i++) {
+    final win = mac.sendIdUInt(windows, selAt, i);
+    if (win == ffi.nullptr) continue;
+    if (_isStatusBarWindow(mac, win) && mac.sendBool(win, selVisible)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool _hasOtherVisibleAppWindow(
+  MacOSAppKitBindings mac,
+  ffi.Pointer<ffi.Void> sharedApp, {
+  required ffi.Pointer<ffi.Void> excluding,
+}) {
+  if (sharedApp == ffi.nullptr) return false;
+  final windows = mac.sendId(sharedApp, mac.sel('windows'));
+  if (windows == ffi.nullptr) return false;
+  final count = mac.sendUInt(windows, mac.sel('count'));
+  final selAt = mac.sel('objectAtIndex:');
+  final selVisible = mac.sel('isVisible');
+  for (var i = 0; i < count; i++) {
+    final win = mac.sendIdUInt(windows, selAt, i);
+    if (win == ffi.nullptr || win == excluding) continue;
+    if (_isStatusBarWindow(mac, win)) continue;
+    if (_isCandidateAppWindow(mac, win) && mac.sendBool(win, selVisible)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/// Result of [debugRunMacOSStatusItemActivationPolicyProbe].
+class MacOSActivationPolicyProbeResult {
+  /// Creates a [MacOSActivationPolicyProbeResult].
+  const MacOSActivationPolicyProbeResult({
+    required this.detectedStatusBarWindowWhileActive,
+    required this.switchedToAccessoryPolicy,
+    required this.restoredRegularPolicy,
+    required this.clearedStatusBarWindowAfterRemove,
+  });
+
+  /// Whether a live `NSStatusItem` was detected as a visible
+  /// `NSStatusBarWindow` in `[NSApp windows]`.
+  final bool detectedStatusBarWindowWhileActive;
+
+  /// Whether `setActivationPolicy:` switched `NSApp` to `Accessory (1)`.
+  final bool switchedToAccessoryPolicy;
+
+  /// Whether `setActivationPolicy:` restored `NSApp` to `Regular (0)`.
+  final bool restoredRegularPolicy;
+
+  /// Whether removing the `NSStatusItem` cleared active status-bar detection.
+  final bool clearedStatusBarWindowAfterRemove;
+}
+
+/// Live macOS FFI probe verifying `NSStatusBarWindow` detection and
+/// `NSApplication.setActivationPolicy:` transitions on macOS 13 through 27+.
+MacOSActivationPolicyProbeResult?
+debugRunMacOSStatusItemActivationPolicyProbe() {
+  if (!Platform.isMacOS) return null;
+  final mac = MacOSAppKitBindings.instance;
+  if (mac == null) return null;
+
+  final nsAppCls = mac.getClass('NSApplication');
+  final nsStatusBarCls = mac.getClass('NSStatusBar');
+  if (nsAppCls == ffi.nullptr || nsStatusBarCls == ffi.nullptr) return null;
+
+  final sharedApp = mac.sendId(nsAppCls, mac.sel('sharedApplication'));
+  final systemBar = mac.sendId(nsStatusBarCls, mac.sel('systemStatusBar'));
+  if (sharedApp == ffi.nullptr || systemBar == ffi.nullptr) return null;
+
+  final sendIdDouble =
+      ffi.DynamicLibrary.open('/usr/lib/libobjc.A.dylib')
+          .lookup<ffi.NativeFunction<ffi.Void Function()>>('objc_msgSend')
+          .cast<
+            ffi.NativeFunction<
+              ffi.Pointer<ffi.Void> Function(
+                ffi.Pointer<ffi.Void>,
+                ffi.Pointer<ffi.Void>,
+                ffi.Double,
+              )
+            >
+          >()
+          .asFunction<
+            ffi.Pointer<ffi.Void> Function(
+              ffi.Pointer<ffi.Void>,
+              ffi.Pointer<ffi.Void>,
+              double,
+            )
+          >();
+
+  final previousPolicy = mac.sendInt(sharedApp, mac.sel('activationPolicy'));
+  final statusItem = sendIdDouble(
+    systemBar,
+    mac.sel('statusItemWithLength:'),
+    -1.0,
+  );
+  if (statusItem == ffi.nullptr) return null;
+
+  try {
+    final activeBeforeRemove = _hasActiveStatusBarItem(mac, sharedApp);
+    final setAccessoryOk = mac.sendBoolInt(
+      sharedApp,
+      mac.sel('setActivationPolicy:'),
+      kNSApplicationActivationPolicyAccessory,
+    );
+    final policyWhileAccessory = mac.sendInt(
+      sharedApp,
+      mac.sel('activationPolicy'),
+    );
+    final setRegularOk = mac.sendBoolInt(
+      sharedApp,
+      mac.sel('setActivationPolicy:'),
+      kNSApplicationActivationPolicyRegular,
+    );
+    final policyAfterRestore = mac.sendInt(
+      sharedApp,
+      mac.sel('activationPolicy'),
+    );
+
+    mac.sendVoidId(systemBar, mac.sel('removeStatusItem:'), statusItem);
+    final activeAfterRemove = _hasActiveStatusBarItem(mac, sharedApp);
+
+    return MacOSActivationPolicyProbeResult(
+      detectedStatusBarWindowWhileActive: activeBeforeRemove,
+      switchedToAccessoryPolicy:
+          setAccessoryOk &&
+          policyWhileAccessory == kNSApplicationActivationPolicyAccessory,
+      restoredRegularPolicy:
+          setRegularOk &&
+          policyAfterRestore == kNSApplicationActivationPolicyRegular,
+      clearedStatusBarWindowAfterRemove: !activeAfterRemove,
+    );
+  } finally {
+    mac.sendBoolInt(sharedApp, mac.sel('setActivationPolicy:'), previousPolicy);
+  }
+}
 
 /// Activation call plan for `NSApplication` across macOS 13 Ventura through
 /// macOS 27 `Golden Gate`+.
@@ -43,6 +223,7 @@ MacOSActivationPlan resolveMacOSActivationPlan({
 
 bool _isCandidateAppWindow(MacOSAppKitBindings mac, ffi.Pointer<ffi.Void> win) {
   if (win == ffi.nullptr) return false;
+  if (_isStatusBarWindow(mac, win)) return false;
   final vc = mac.sendId(win, mac.sel('contentViewController'));
   if (vc != ffi.nullptr) return true;
   final mask = mac.sendUInt(win, mac.sel('styleMask'));
@@ -109,6 +290,7 @@ class MacOSWindowAdapter implements WindowPlatformAdapter {
 
   bool _ownsDelegateProperty = false;
   bool _desiredVisible = true;
+  bool _switchedToAccessoryOnHide = false;
   TitleBarStyle _titleBarStyle = TitleBarStyle.normal;
   bool _isWindowControlButtonsVisible = true;
   NativeColor _backgroundColor = const NativeColor(0x00000000);
@@ -126,7 +308,16 @@ class MacOSWindowAdapter implements WindowPlatformAdapter {
       mac: mac,
       nsWindow: nativeHandle,
       sink: sink,
+      onBecameKey: _handleWindowBecameKey,
     );
+  }
+
+  void _handleWindowBecameKey() {
+    if (!isNative) return;
+    final mac = MacOSAppKitBindings.instance;
+    if (mac == null) return;
+    _desiredVisible = true;
+    _restoreRegularActivationPolicyIfNeeded(mac);
   }
 
   @override
@@ -283,17 +474,19 @@ class MacOSWindowAdapter implements WindowPlatformAdapter {
   @override
   set isVisibleInTaskbar(bool visible) {
     _isVisibleInTaskbar = visible;
+    _switchedToAccessoryOnHide = false;
     if (!isNative) return;
     final mac = MacOSAppKitBindings.instance;
     if (mac == null) return;
     try {
       final sharedApp = mac.runningNSApp();
       if (sharedApp != ffi.nullptr) {
-        // NSApplicationActivationPolicyRegular = 0, Accessory = 1
-        mac.sendVoidInt(
+        mac.sendBoolInt(
           sharedApp,
           mac.sel('setActivationPolicy:'),
-          visible ? 0 : 1,
+          visible
+              ? kNSApplicationActivationPolicyRegular
+              : kNSApplicationActivationPolicyAccessory,
         );
       }
     } catch (error, stackTrace) {
@@ -492,6 +685,7 @@ class MacOSWindowAdapter implements WindowPlatformAdapter {
     final mac = MacOSAppKitBindings.instance;
     if (mac == null) return;
     try {
+      _restoreRegularActivationPolicyIfNeeded(mac);
       if (isMinimized) {
         mac.sendVoidId(nativeHandle, mac.sel('deminiaturize:'), ffi.nullptr);
       }
@@ -501,6 +695,7 @@ class MacOSWindowAdapter implements WindowPlatformAdapter {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (!_desiredVisible || !isNative) return;
           if (!isFocused) {
+            _restoreRegularActivationPolicyIfNeeded(mac);
             _activateAppAndOrderFront(mac);
           }
         });
@@ -530,6 +725,7 @@ class MacOSWindowAdapter implements WindowPlatformAdapter {
     try {
       mac.sendVoidBool(nativeHandle, mac.sel('setIsVisible:'), false);
       mac.sendVoidId(nativeHandle, mac.sel('orderOut:'), ffi.nullptr);
+      _switchToAccessoryPolicyIfTrayActive(mac);
     } catch (error, stackTrace) {
       NativeCoreDiagnostics.report(
         'MacOSWindowAdapter.hide',
@@ -545,6 +741,7 @@ class MacOSWindowAdapter implements WindowPlatformAdapter {
     final mac = MacOSAppKitBindings.instance;
     if (mac == null) return;
     try {
+      _restoreRegularActivationPolicyIfNeeded(mac);
       if (isMinimized) {
         mac.sendVoidId(nativeHandle, mac.sel('deminiaturize:'), ffi.nullptr);
       }
@@ -556,6 +753,47 @@ class MacOSWindowAdapter implements WindowPlatformAdapter {
         stackTrace,
       );
     }
+  }
+
+  void _switchToAccessoryPolicyIfTrayActive(MacOSAppKitBindings mac) {
+    final sharedApp = mac.runningNSApp();
+    if (sharedApp == ffi.nullptr) return;
+    if (!shouldSwitchMacOSActivationPolicyOnHide(
+      hasActiveStatusItem: _hasActiveStatusBarItem(mac, sharedApp),
+      hasOtherVisibleAppWindow: _hasOtherVisibleAppWindow(
+        mac,
+        sharedApp,
+        excluding: nativeHandle,
+      ),
+      isVisibleInTaskbar: _isVisibleInTaskbar,
+    )) {
+      return;
+    }
+    _switchedToAccessoryOnHide = true;
+    mac.sendBoolInt(
+      sharedApp,
+      mac.sel('setActivationPolicy:'),
+      kNSApplicationActivationPolicyAccessory,
+    );
+  }
+
+  void _restoreRegularActivationPolicyIfNeeded(MacOSAppKitBindings mac) {
+    final sharedApp = mac.runningNSApp();
+    if (sharedApp == ffi.nullptr) return;
+    final currentPolicy = mac.sendInt(sharedApp, mac.sel('activationPolicy'));
+    if (!shouldRestoreMacOSActivationPolicyOnShow(
+      switchedToAccessoryOnHide: _switchedToAccessoryOnHide,
+      isVisibleInTaskbar: _isVisibleInTaskbar,
+      currentActivationPolicy: currentPolicy,
+    )) {
+      return;
+    }
+    _switchedToAccessoryOnHide = false;
+    mac.sendBoolInt(
+      sharedApp,
+      mac.sel('setActivationPolicy:'),
+      kNSApplicationActivationPolicyRegular,
+    );
   }
 
   @override

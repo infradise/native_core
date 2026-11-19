@@ -46,5 +46,101 @@ void main() {
         expect(displays.first.workArea.height, greaterThan(0));
       },
     );
+
+    test(
+      'shouldSwitchMacOSActivationPolicyOnHide switches to Accessory only when a status item is active and no other app window is visible',
+      () {
+        expect(
+          shouldSwitchMacOSActivationPolicyOnHide(
+            hasActiveStatusItem: true,
+            hasOtherVisibleAppWindow: false,
+            isVisibleInTaskbar: true,
+          ),
+          isTrue,
+        );
+        expect(
+          shouldSwitchMacOSActivationPolicyOnHide(
+            hasActiveStatusItem: false,
+            hasOtherVisibleAppWindow: false,
+            isVisibleInTaskbar: true,
+          ),
+          isFalse,
+        );
+        expect(
+          shouldSwitchMacOSActivationPolicyOnHide(
+            hasActiveStatusItem: true,
+            hasOtherVisibleAppWindow: true,
+            isVisibleInTaskbar: true,
+          ),
+          isFalse,
+        );
+        expect(
+          shouldSwitchMacOSActivationPolicyOnHide(
+            hasActiveStatusItem: true,
+            hasOtherVisibleAppWindow: false,
+            isVisibleInTaskbar: false,
+          ),
+          isFalse,
+        );
+
+        expect(
+          shouldRestoreMacOSActivationPolicyOnShow(
+            switchedToAccessoryOnHide: true,
+            isVisibleInTaskbar: true,
+            currentActivationPolicy: kNSApplicationActivationPolicyAccessory,
+          ),
+          isTrue,
+        );
+        expect(
+          shouldRestoreMacOSActivationPolicyOnShow(
+            switchedToAccessoryOnHide: false,
+            isVisibleInTaskbar: false,
+            currentActivationPolicy: kNSApplicationActivationPolicyAccessory,
+          ),
+          isFalse,
+        );
+        expect(
+          shouldRestoreMacOSActivationPolicyOnShow(
+            switchedToAccessoryOnHide: false,
+            isVisibleInTaskbar: true,
+            currentActivationPolicy: kNSApplicationActivationPolicyRegular,
+          ),
+          isFalse,
+        );
+      },
+    );
+
+    test(
+      'live macOS NativeCoreWindowDelegate dispatches windowShouldClose: and NSWindowDidBecomeKeyNotification via objc_msgSend',
+      () {
+        if (!Platform.isMacOS) return;
+        final probe = debugRunMacOSWindowShouldCloseProbe();
+        expect(probe, isNotNull);
+        expect(probe!.cancelReturnedFalse, isTrue);
+        expect(probe.allowReturnedTrue, isTrue);
+        expect(probe.becameKeyDispatched, isTrue);
+      },
+    );
+
+    test(
+      'live macOS status item detection and NSApplication activation policy transitions succeed',
+      () {
+        if (!Platform.isMacOS) return;
+        final probe = debugRunMacOSStatusItemActivationPolicyProbe();
+        expect(probe, isNotNull);
+        expect(probe!.detectedStatusBarWindowWhileActive, isTrue);
+        expect(probe.switchedToAccessoryPolicy, isTrue);
+        expect(probe.restoredRegularPolicy, isTrue);
+        expect(probe.clearedStatusBarWindowAfterRemove, isTrue);
+      },
+    );
+
+    test(
+      'live macOS NSApplicationWillTerminateNotification observer dispatches cleanup callbacks',
+      () {
+        if (!Platform.isMacOS) return;
+        expect(debugRunMacOSWillTerminateObserverProbe(), isTrue);
+      },
+    );
   });
 }

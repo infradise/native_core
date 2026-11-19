@@ -1,11 +1,33 @@
+import 'dart:async' show Timer;
 import 'dart:ffi' as ffi;
 import 'dart:io';
+
+import 'package:flutter/widgets.dart' show WidgetsBinding;
 
 import '../../diagnostics.dart';
 import '../../ffi/native_memory.dart';
 import '../../models.dart';
 import '../window_adapter.dart';
 import 'macos_appkit_bindings.dart';
+
+/// Wakes Flutter's macOS `CFRunLoop` / Dart microtask queue immediately after a
+/// synchronous `NativeCallable.isolateLocal` AppKit callback cancels a close
+/// request and queues async Dart work (such as Close-to-Tray `window.hide()`).
+///
+/// Without an explicit timer + frame wakeup, returning `NO` from
+/// `windowShouldClose:` while the pointer stays over AppKit's red traffic-light
+/// close button (`_NSThemeCloseWidget`) leaves microtasks stranded until the
+/// cursor exits into `FlutterView`.
+void _wakeFlutterRunLoop() {
+  Timer.run(() {});
+  try {
+    WidgetsBinding.instance
+      ..ensureVisualUpdate()
+      ..scheduleFrame();
+  } catch (_) {
+    // WidgetsBinding may not be initialized in headless Dart VM tests.
+  }
+}
 
 /// Verifies on macOS that `libobjc.A.dylib` resolved `class_replaceMethod`
 /// (required for Hot Restart-safe delegate trampoline rebinding).
@@ -16,9 +38,150 @@ bool debugHasMacOSReplaceMethodSymbol() {
   return mac.getClass('NSObject') != ffi.nullptr;
 }
 
+/// Result of [debugRunMacOSWindowShouldCloseProbe].
+class MacOSWindowCloseProbeResult {
+  /// Creates a [MacOSWindowCloseProbeResult].
+  const MacOSWindowCloseProbeResult({
+    required this.cancelReturnedFalse,
+    required this.allowReturnedTrue,
+    required this.becameKeyDispatched,
+  });
+
+  /// Whether `windowShouldClose:` returned `NO` when the sink cancelled close.
+  final bool cancelReturnedFalse;
+
+  /// Whether `windowShouldClose:` returned `YES` when the sink allowed close.
+  final bool allowReturnedTrue;
+
+  /// Whether `onWindowDidBecomeKeyNotification:` invoked `onBecameKey`.
+  final bool becameKeyDispatched;
+}
+
+class _ProbeEventSink implements WindowAdapterEventSink {
+  _ProbeEventSink({required this.allowClose});
+
+  bool allowClose;
+
+  @override
+  bool dispatchCloseRequested() => allowClose;
+
+  @override
+  void notifyNativeMoved(NativeOffset position) {}
+}
+
+/// Live macOS FFI probe exercising Objective-C `objc_msgSend` dispatch through
+/// `NativeCoreWindowDelegate` (`windowShouldClose:` cancel/allow and
+/// `onWindowDidBecomeKeyNotification:`).
+MacOSWindowCloseProbeResult? debugRunMacOSWindowShouldCloseProbe() {
+  if (!Platform.isMacOS) return null;
+  final mac = MacOSAppKitBindings.instance;
+  if (mac == null) return null;
+
+  final nsObjectCls = mac.getClass('NSObject');
+  if (nsObjectCls == ffi.nullptr) return null;
+  final sentinelWindow = mac.sendId(
+    mac.sendId(nsObjectCls, mac.sel('alloc')),
+    mac.sel('init'),
+  );
+  if (sentinelWindow == ffi.nullptr) return null;
+
+  final registry = MacOSWindowDelegateRegistry.instance;
+  final sink = _ProbeEventSink(allowClose: false);
+  var becameKey = false;
+  try {
+    final delegate = registry._ensureDelegateInstance(mac);
+    if (delegate == ffi.nullptr) return null;
+    registry._entries[sentinelWindow.address] = (
+      window: sentinelWindow,
+      sink: sink,
+      onBecameKey: () => becameKey = true,
+    );
+
+    final sendBoolId =
+        ffi.DynamicLibrary.open('/usr/lib/libobjc.A.dylib')
+            .lookup<ffi.NativeFunction<ffi.Void Function()>>('objc_msgSend')
+            .cast<
+              ffi.NativeFunction<
+                ffi.Bool Function(
+                  ffi.Pointer<ffi.Void>,
+                  ffi.Pointer<ffi.Void>,
+                  ffi.Pointer<ffi.Void>,
+                )
+              >
+            >()
+            .asFunction<
+              bool Function(
+                ffi.Pointer<ffi.Void>,
+                ffi.Pointer<ffi.Void>,
+                ffi.Pointer<ffi.Void>,
+              )
+            >();
+
+    final cancelRes = sendBoolId(
+      delegate,
+      mac.sel('windowShouldClose:'),
+      sentinelWindow,
+    );
+    sink.allowClose = true;
+    final allowRes = sendBoolId(
+      delegate,
+      mac.sel('windowShouldClose:'),
+      sentinelWindow,
+    );
+
+    final nsNotificationCls = mac.getClass('NSNotification');
+    if (nsNotificationCls != ffi.nullptr) {
+      final name = mac.nsString('NSWindowDidBecomeKeyNotification');
+      final sendId2 =
+          ffi.DynamicLibrary.open('/usr/lib/libobjc.A.dylib')
+              .lookup<ffi.NativeFunction<ffi.Void Function()>>('objc_msgSend')
+              .cast<
+                ffi.NativeFunction<
+                  ffi.Pointer<ffi.Void> Function(
+                    ffi.Pointer<ffi.Void>,
+                    ffi.Pointer<ffi.Void>,
+                    ffi.Pointer<ffi.Void>,
+                    ffi.Pointer<ffi.Void>,
+                  )
+                >
+              >()
+              .asFunction<
+                ffi.Pointer<ffi.Void> Function(
+                  ffi.Pointer<ffi.Void>,
+                  ffi.Pointer<ffi.Void>,
+                  ffi.Pointer<ffi.Void>,
+                  ffi.Pointer<ffi.Void>,
+                )
+              >();
+      final note = sendId2(
+        nsNotificationCls,
+        mac.sel('notificationWithName:object:'),
+        name,
+        sentinelWindow,
+      );
+      if (note != ffi.nullptr) {
+        mac.sendVoidId(
+          delegate,
+          mac.sel('onWindowDidBecomeKeyNotification:'),
+          note,
+        );
+      }
+    }
+
+    return MacOSWindowCloseProbeResult(
+      cancelReturnedFalse: !cancelRes,
+      allowReturnedTrue: allowRes,
+      becameKeyDispatched: becameKey,
+    );
+  } finally {
+    registry._entries.remove(sentinelWindow.address);
+    mac.sendVoid(sentinelWindow, mac.sel('release'));
+  }
+}
+
 /// Manages the Objective-C `NativeCoreWindowDelegate` class and routes
-/// `windowShouldClose:` / `windowDidMove:` notifications by `NSWindow*`
-/// address.
+/// `windowShouldClose:`, `windowDidMove:`, and
+/// `NSWindowDidBecomeKeyNotification` callbacks by `NSWindow*` address.
 class MacOSWindowDelegateRegistry {
   MacOSWindowDelegateRegistry._();
 
@@ -26,9 +189,23 @@ class MacOSWindowDelegateRegistry {
   static final MacOSWindowDelegateRegistry instance =
       MacOSWindowDelegateRegistry._();
 
-  final Map<int, ({ffi.Pointer<ffi.Void> window, WindowAdapterEventSink sink})>
+  final Map<
+    int,
+    ({
+      ffi.Pointer<ffi.Void> window,
+      WindowAdapterEventSink sink,
+      void Function()? onBecameKey,
+    })
+  >
   _entries =
-      <int, ({ffi.Pointer<ffi.Void> window, WindowAdapterEventSink sink})>{};
+      <
+        int,
+        ({
+          ffi.Pointer<ffi.Void> window,
+          WindowAdapterEventSink sink,
+          void Function()? onBecameKey,
+        })
+      >{};
 
   ffi.Pointer<ffi.Void>? _delegateInstance;
   ffi.NativeCallable<
@@ -47,21 +224,37 @@ class MacOSWindowDelegateRegistry {
     )
   >?
   _windowDidMoveCallable;
+  ffi.NativeCallable<
+    ffi.Void Function(
+      ffi.Pointer<ffi.Void>,
+      ffi.Pointer<ffi.Void>,
+      ffi.Pointer<ffi.Void>,
+    )
+  >?
+  _windowDidBecomeKeyCallable;
 
-  /// Attaches `windowShouldClose:` and `windowDidMove:` interception to
-  /// [nsWindow] and returns `true` when [nsWindow]'s `delegate` property was
-  /// directly assigned to `NativeCoreWindowDelegate`.
+  /// Attaches `windowShouldClose:`, `windowDidMove:`, and
+  /// `NSWindowDidBecomeKeyNotification` interception to [nsWindow] and returns
+  /// `true` when [nsWindow]'s `delegate` property was directly assigned to
+  /// `NativeCoreWindowDelegate`.
   bool attach({
     required MacOSAppKitBindings mac,
     required ffi.Pointer<ffi.Void> nsWindow,
     required WindowAdapterEventSink sink,
+    void Function()? onBecameKey,
   }) {
     if (nsWindow == ffi.nullptr) return false;
-    _entries[nsWindow.address] = (window: nsWindow, sink: sink);
+    _entries[nsWindow.address] = (
+      window: nsWindow,
+      sink: sink,
+      onBecameKey: onBecameKey,
+    );
 
     try {
       final delegate = _ensureDelegateInstance(mac);
       if (delegate == ffi.nullptr) return false;
+
+      _registerBecomeKeyObserver(mac, delegate, nsWindow);
 
       final existing = mac.sendId(nsWindow, mac.sel('delegate'));
       if (existing == ffi.nullptr) {
@@ -98,21 +291,38 @@ class MacOSWindowDelegateRegistry {
     return false;
   }
 
-  /// Unregisters [nsWindow] and clears its `delegate` property if it still
-  /// points to `NativeCoreWindowDelegate`.
+  /// Unregisters [nsWindow], removes its `NSWindowDidBecomeKeyNotification`
+  /// observer, and clears its `delegate` property if it still points to
+  /// `NativeCoreWindowDelegate`.
   void detach({
     required MacOSAppKitBindings? mac,
     required ffi.Pointer<ffi.Void> nsWindow,
     required bool ownsDelegateProperty,
   }) {
     _entries.remove(nsWindow.address);
-    if (!ownsDelegateProperty || mac == null || nsWindow == ffi.nullptr) return;
+    if (mac == null || nsWindow == ffi.nullptr) return;
     final delegate = _delegateInstance;
     if (delegate == null || delegate == ffi.nullptr) return;
     try {
-      final current = mac.sendId(nsWindow, mac.sel('delegate'));
-      if (current == delegate) {
-        mac.sendVoidId(nsWindow, mac.sel('setDelegate:'), ffi.nullptr);
+      final centerCls = mac.getClass('NSNotificationCenter');
+      if (centerCls != ffi.nullptr) {
+        final center = mac.sendId(centerCls, mac.sel('defaultCenter'));
+        final noteName = mac.nsString('NSWindowDidBecomeKeyNotification');
+        if (center != ffi.nullptr && noteName != ffi.nullptr) {
+          mac.sendVoidId3(
+            center,
+            mac.sel('removeObserver:name:object:'),
+            delegate,
+            noteName,
+            nsWindow,
+          );
+        }
+      }
+      if (ownsDelegateProperty) {
+        final current = mac.sendId(nsWindow, mac.sel('delegate'));
+        if (current == delegate) {
+          mac.sendVoidId(nsWindow, mac.sel('setDelegate:'), ffi.nullptr);
+        }
       }
     } catch (error, stackTrace) {
       NativeCoreDiagnostics.report(
@@ -121,6 +331,34 @@ class MacOSWindowDelegateRegistry {
         stackTrace,
       );
     }
+  }
+
+  void _registerBecomeKeyObserver(
+    MacOSAppKitBindings mac,
+    ffi.Pointer<ffi.Void> delegate,
+    ffi.Pointer<ffi.Void> nsWindow,
+  ) {
+    final centerCls = mac.getClass('NSNotificationCenter');
+    if (centerCls == ffi.nullptr) return;
+    final center = mac.sendId(centerCls, mac.sel('defaultCenter'));
+    final noteName = mac.nsString('NSWindowDidBecomeKeyNotification');
+    if (center == ffi.nullptr || noteName == ffi.nullptr) return;
+
+    mac.sendVoidId3(
+      center,
+      mac.sel('removeObserver:name:object:'),
+      delegate,
+      noteName,
+      nsWindow,
+    );
+    mac.sendVoidId4(
+      center,
+      mac.sel('addObserver:selector:name:object:'),
+      delegate,
+      mac.sel('onWindowDidBecomeKeyNotification:'),
+      noteName,
+      nsWindow,
+    );
   }
 
   ffi.Pointer<ffi.Void> _ensureDelegateInstance(MacOSAppKitBindings mac) {
@@ -141,6 +379,13 @@ class MacOSWindowDelegateRegistry {
         ffi.Pointer<ffi.Void>,
       )
     >.isolateLocal(_onWindowDidMove);
+    _windowDidBecomeKeyCallable ??= ffi.NativeCallable<
+      ffi.Void Function(
+        ffi.Pointer<ffi.Void>,
+        ffi.Pointer<ffi.Void>,
+        ffi.Pointer<ffi.Void>,
+      )
+    >.isolateLocal(_onWindowDidBecomeKeyNotification);
 
     var cls = mac.getClass('NativeCoreWindowDelegate');
     if (cls == ffi.nullptr) {
@@ -164,12 +409,18 @@ class MacOSWindowDelegateRegistry {
           _windowDidMoveCallable!.nativeFunction.cast(),
           types,
         );
+        mac.addMethod(
+          cls,
+          mac.sel('onWindowDidBecomeKeyNotification:'),
+          _windowDidBecomeKeyCallable!.nativeFunction.cast(),
+          types,
+        );
       });
       mac.registerClassPair(cls);
     } else {
       // Across Flutter Hot Restart, the Objective-C runtime retains the
       // previously registered class whose method IMPs point at the terminated
-      // Dart isolate's trampolines. Rebind both selectors to this live isolate.
+      // Dart isolate's trampolines. Rebind all selectors to this live isolate.
       NativeMemory.withUtf8CString('B@:@', (types) {
         mac.replaceMethod(
           cls,
@@ -183,6 +434,12 @@ class MacOSWindowDelegateRegistry {
           cls,
           mac.sel('windowDidMove:'),
           _windowDidMoveCallable!.nativeFunction.cast(),
+          types,
+        );
+        mac.replaceMethod(
+          cls,
+          mac.sel('onWindowDidBecomeKeyNotification:'),
+          _windowDidBecomeKeyCallable!.nativeFunction.cast(),
           types,
         );
       });
@@ -201,7 +458,11 @@ class MacOSWindowDelegateRegistry {
   ) {
     final entry = instance._entries[sender.address];
     if (entry == null) return true;
-    return entry.sink.dispatchCloseRequested();
+    final allowClose = entry.sink.dispatchCloseRequested();
+    if (!allowClose) {
+      _wakeFlutterRunLoop();
+    }
+    return allowClose;
   }
 
   static void _onWindowDidMove(
@@ -221,5 +482,18 @@ class MacOSWindowDelegateRegistry {
     final primaryHeight = mac.primaryScreenHeight();
     final top = primaryHeight - (frame.origin.y + frame.size.height);
     entry.sink.notifyNativeMoved(NativeOffset(frame.origin.x, top));
+  }
+
+  static void _onWindowDidBecomeKeyNotification(
+    ffi.Pointer<ffi.Void> self,
+    ffi.Pointer<ffi.Void> cmd,
+    ffi.Pointer<ffi.Void> notification,
+  ) {
+    final mac = MacOSAppKitBindings.instance;
+    if (mac == null || notification == ffi.nullptr) return;
+    final sender = mac.sendId(notification, mac.sel('object'));
+    if (sender == ffi.nullptr) return;
+    final entry = instance._entries[sender.address];
+    entry?.onBecameKey?.call();
   }
 }

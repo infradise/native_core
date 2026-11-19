@@ -1,10 +1,13 @@
 import 'dart:ffi' as ffi;
-import 'dart:ui' show Color, Offset, Rect, Size;
+import 'dart:io';
+import 'dart:ui' show AppExitResponse, Color, Offset, Rect, Size;
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:native_core/native_core.dart';
 // ignore: implementation_imports
 import 'package:native_core/src/ffi/native_memory.dart';
+// ignore: implementation_imports
+import 'package:native_core/src/testing/native_core_testing.dart';
 
 void main() {
   group('Window facade, models, diagnostics, and NativeMemory', () {
@@ -135,6 +138,49 @@ void main() {
         expect(secondCalled, isTrue);
         expect(captured, hasLength(1));
         expect(captured.single, contains('Window.listener:Bad state: boom'));
+        window.dispose();
+      },
+    );
+
+    test(
+      'shouldForwardAppExitToWindowClose isolates Windows WM_CLOSE from macOS/Linux app termination',
+      () async {
+        expect(
+          shouldForwardAppExitToWindowClose(
+            isWindows: true,
+            isMacOS: false,
+            isLinux: false,
+          ),
+          isTrue,
+        );
+        expect(
+          shouldForwardAppExitToWindowClose(
+            isWindows: false,
+            isMacOS: true,
+            isLinux: false,
+          ),
+          isFalse,
+        );
+        expect(
+          shouldForwardAppExitToWindowClose(
+            isWindows: false,
+            isMacOS: false,
+            isLinux: true,
+          ),
+          isFalse,
+        );
+
+        final window = Window.fakeForTesting();
+        window.addListener((event) {
+          if (event is WindowCloseRequestedEvent) {
+            event.request.cancel();
+          }
+        });
+        final response = await window.didRequestAppExit();
+        expect(
+          response,
+          Platform.isWindows ? AppExitResponse.cancel : AppExitResponse.exit,
+        );
         window.dispose();
       },
     );
