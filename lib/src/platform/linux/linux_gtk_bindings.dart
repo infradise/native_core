@@ -21,6 +21,13 @@ const int kGtkWindowToplevel = 0;
 /// (`1 << 1 == 0x02`).
 const int kGdkWindowStateIconified = 0x02;
 
+/// `GdkWindowState` bit flag indicating a maximized window (`1 << 2 == 0x04`).
+const int kGdkWindowStateMaximized = 0x04;
+
+/// `GtkWindowPosition` value requesting compositor/WM centering
+/// (`GTK_WIN_POS_CENTER == 1`).
+const int kGtkWinPosCenter = 1;
+
 /// Doubly-linked list node (`GList`) returned by GLib/GTK list APIs.
 final class GList extends ffi.Struct {
   /// Element payload pointer.
@@ -115,8 +122,7 @@ class LinuxGtkBindings {
     required this.gdkSeatGetPointer,
     required this.gdkDeviceGetPosition,
     required this.gdkWindowGetState,
-    required this.gdkWindowShow,
-    required this.gdkWindowFocus,
+    required this.gdkWindowResize,
     required this.gdkEventNew,
     required this.gdkEventSetDevice,
     required this.gdkEventGetDevice,
@@ -136,6 +142,8 @@ class LinuxGtkBindings {
     required this.gtkWindowFullscreen,
     required this.gtkWindowUnfullscreen,
     required this.gtkWindowPresentWithTime,
+    required this.gtkWindowSetDefaultSize,
+    required this.gtkWindowSetPosition,
     required this.gtkWindowResize,
     required this.gtkWindowMove,
     required this.gtkWindowGetPosition,
@@ -146,6 +154,7 @@ class LinuxGtkBindings {
     required this.gtkGetCurrentEventTime,
     required this.gtkWidgetInDestruction,
     required this.gtkWidgetGetRealized,
+    required this.gtkWidgetGetMapped,
     required this.gtkWidgetGetVisible,
     required this.gtkWidgetSetVisible,
     required this.gtkWidgetShow,
@@ -264,14 +273,10 @@ class LinuxGtkBindings {
           ffi.Uint32 Function(ffi.Pointer<ffi.Void>),
           int Function(ffi.Pointer<ffi.Void>)
         >('gdk_window_get_state'),
-        gdkWindowShow: gdk.lookupFunction<
-          ffi.Void Function(ffi.Pointer<ffi.Void>),
-          void Function(ffi.Pointer<ffi.Void>)
-        >('gdk_window_show'),
-        gdkWindowFocus: gdk.lookupFunction<
-          ffi.Void Function(ffi.Pointer<ffi.Void>, ffi.Uint32),
-          void Function(ffi.Pointer<ffi.Void>, int)
-        >('gdk_window_focus'),
+        gdkWindowResize: gdk.lookupFunction<
+          ffi.Void Function(ffi.Pointer<ffi.Void>, ffi.Int32, ffi.Int32),
+          void Function(ffi.Pointer<ffi.Void>, int, int)
+        >('gdk_window_resize'),
         gdkEventNew: gdk.lookupFunction<
           ffi.Pointer<GdkEventButton> Function(ffi.Int32),
           ffi.Pointer<GdkEventButton> Function(int)
@@ -342,6 +347,14 @@ class LinuxGtkBindings {
           ffi.Void Function(ffi.Pointer<ffi.Void>, ffi.Uint32),
           void Function(ffi.Pointer<ffi.Void>, int)
         >('gtk_window_present_with_time'),
+        gtkWindowSetDefaultSize: gtk.lookupFunction<
+          ffi.Void Function(ffi.Pointer<ffi.Void>, ffi.Int32, ffi.Int32),
+          void Function(ffi.Pointer<ffi.Void>, int, int)
+        >('gtk_window_set_default_size'),
+        gtkWindowSetPosition: gtk.lookupFunction<
+          ffi.Void Function(ffi.Pointer<ffi.Void>, ffi.Int32),
+          void Function(ffi.Pointer<ffi.Void>, int)
+        >('gtk_window_set_position'),
         gtkWindowResize: gtk.lookupFunction<
           ffi.Void Function(ffi.Pointer<ffi.Void>, ffi.Int32, ffi.Int32),
           void Function(ffi.Pointer<ffi.Void>, int, int)
@@ -404,6 +417,10 @@ class LinuxGtkBindings {
           ffi.Int32 Function(ffi.Pointer<ffi.Void>),
           int Function(ffi.Pointer<ffi.Void>)
         >('gtk_widget_get_realized'),
+        gtkWidgetGetMapped: gtk.lookupFunction<
+          ffi.Int32 Function(ffi.Pointer<ffi.Void>),
+          int Function(ffi.Pointer<ffi.Void>)
+        >('gtk_widget_get_mapped'),
         gtkWidgetGetVisible: gtk.lookupFunction<
           ffi.Int32 Function(ffi.Pointer<ffi.Void>),
           int Function(ffi.Pointer<ffi.Void>)
@@ -550,11 +567,8 @@ class LinuxGtkBindings {
   /// `gdk_window_get_state`.
   final int Function(ffi.Pointer<ffi.Void>) gdkWindowGetState;
 
-  /// `gdk_window_show`.
-  final void Function(ffi.Pointer<ffi.Void>) gdkWindowShow;
-
-  /// `gdk_window_focus`.
-  final void Function(ffi.Pointer<ffi.Void>, int) gdkWindowFocus;
+  /// `gdk_window_resize`.
+  final void Function(ffi.Pointer<ffi.Void>, int, int) gdkWindowResize;
 
   /// `gdk_event_new`.
   final ffi.Pointer<GdkEventButton> Function(int) gdkEventNew;
@@ -616,6 +630,12 @@ class LinuxGtkBindings {
   /// `gtk_window_present_with_time`.
   final void Function(ffi.Pointer<ffi.Void>, int) gtkWindowPresentWithTime;
 
+  /// `gtk_window_set_default_size`.
+  final void Function(ffi.Pointer<ffi.Void>, int, int) gtkWindowSetDefaultSize;
+
+  /// `gtk_window_set_position`.
+  final void Function(ffi.Pointer<ffi.Void>, int) gtkWindowSetPosition;
+
   /// `gtk_window_resize`.
   final void Function(ffi.Pointer<ffi.Void>, int, int) gtkWindowResize;
 
@@ -657,6 +677,9 @@ class LinuxGtkBindings {
 
   /// `gtk_widget_get_realized`.
   final int Function(ffi.Pointer<ffi.Void>) gtkWidgetGetRealized;
+
+  /// `gtk_widget_get_mapped`.
+  final int Function(ffi.Pointer<ffi.Void>) gtkWidgetGetMapped;
 
   /// `gtk_widget_get_visible`.
   final int Function(ffi.Pointer<ffi.Void>) gtkWidgetGetVisible;

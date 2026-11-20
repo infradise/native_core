@@ -1,10 +1,65 @@
+import 'dart:async' show Timer;
 import 'dart:ffi' as ffi;
+
+import 'package:flutter/widgets.dart' show WidgetsBinding;
 
 import '../../diagnostics.dart';
 import '../../ffi/native_memory.dart';
 import '../../models.dart';
 import '../window_adapter.dart';
 import 'linux_gtk_bindings.dart';
+
+/// GTK3 presentation strategy resolved by [resolveLinuxPresentAction] for
+/// X11 vs Wayland sessions across unmapped, hidden, and mapped window states.
+enum LinuxPresentAction {
+  /// Deiconify and call `gtk_widget_show` without invoking
+  /// `gtk_window_present_with_time(0)` (or raw GDK focus/show) on an unmapped
+  /// Wayland `GtkWindow`.
+  widgetShowOnly,
+
+  /// Deiconify and invoke `gtk_window_present_with_time` (using a fresh X11
+  /// server timestamp on X11 when no current GDK event is active).
+  presentWithTime,
+
+  /// Skip redundant presentation (for example `focus()` called synchronously
+  /// right after `show()` on a Wayland window that has not mapped yet, which
+  /// would otherwise emit an unauthenticated activation request and trigger
+  /// GNOME Mutter's `"<App>" is ready` banner).
+  noop,
+}
+
+/// Pure, testable decision function choosing the safe GTK3 presentation call
+/// sequence on Linux Wayland and X11.
+LinuxPresentAction resolveLinuxPresentAction({
+  required bool isShow,
+  required bool isX11,
+  required bool isVisible,
+  required bool isMapped,
+}) {
+  if (isShow) {
+    if (!isVisible || (!isX11 && !isMapped)) {
+      return LinuxPresentAction.widgetShowOnly;
+    }
+    return LinuxPresentAction.presentWithTime;
+  }
+  if (!isX11 && !isMapped) {
+    return isVisible
+        ? LinuxPresentAction.noop
+        : LinuxPresentAction.widgetShowOnly;
+  }
+  return LinuxPresentAction.presentWithTime;
+}
+
+void _wakeLinuxFlutterRunLoop() {
+  Timer.run(() {});
+  try {
+    WidgetsBinding.instance
+      ..ensureVisualUpdate()
+      ..scheduleFrame();
+  } catch (_) {
+    // WidgetsBinding may not be initialized in headless Dart VM tests.
+  }
+}
 
 /// Pure, testable selector for resolving the primary Linux `GtkWindow` from
 /// `gtk_window_list_toplevels()` without accidentally picking a prepended
@@ -290,6 +345,9 @@ class LinuxWindowAdapter implements WindowPlatformAdapter {
     final sink = adapter?._sink;
     if (sink == null) return 0;
     final allowClose = sink.dispatchCloseRequested();
+    if (!allowClose) {
+      _wakeLinuxFlutterRunLoop();
+    }
     return allowClose ? 0 : 1;
   }
 
@@ -380,7 +438,12 @@ class LinuxWindowAdapter implements WindowPlatformAdapter {
     final gtk = LinuxGtkBindings.instance;
     if (gtk == null) return false;
     try {
-      return gtk.gtkWindowIsMaximized(nativeHandle) != 0;
+      if (gtk.gtkWindowIsMaximized(nativeHandle) != 0) return true;
+      final gdkWin = gtk.gtkWidgetGetWindow(nativeHandle);
+      if (gdkWin != ffi.nullptr) {
+        return (gtk.gdkWindowGetState(gdkWin) & kGdkWindowStateMaximized) != 0;
+      }
+      return false;
     } catch (error, stackTrace) {
       NativeCoreDiagnostics.report(
         'LinuxWindowAdapter.isMaximized',
@@ -544,12 +607,10 @@ class LinuxWindowAdapter implements WindowPlatformAdapter {
     final gtk = LinuxGtkBindings.instance;
     if (gtk == null) return;
     try {
+      final width = rect.width.round();
+      final height = rect.height.round();
       gtk.gtkWindowMove(nativeHandle, rect.left.round(), rect.top.round());
-      gtk.gtkWindowResize(
-        nativeHandle,
-        rect.width.round(),
-        rect.height.round(),
-      );
+      _applyWindowSize(gtk, width, height);
     } catch (error, stackTrace) {
       NativeCoreDiagnostics.report(
         'LinuxWindowAdapter.setBounds',
@@ -572,11 +633,7 @@ class LinuxWindowAdapter implements WindowPlatformAdapter {
     final gtk = LinuxGtkBindings.instance;
     if (gtk == null) return;
     try {
-      gtk.gtkWindowResize(
-        nativeHandle,
-        size.width.round(),
-        size.height.round(),
-      );
+      _applyWindowSize(gtk, size.width.round(), size.height.round());
     } catch (error, stackTrace) {
       NativeCoreDiagnostics.report(
         'LinuxWindowAdapter.setSize',
@@ -584,6 +641,35 @@ class LinuxWindowAdapter implements WindowPlatformAdapter {
         stackTrace,
       );
     }
+  }
+
+  /// Requests native GTK window centering (`GTK_WIN_POS_CENTER`), avoiding
+  /// Wayland `gtk_window_move(0, 0)` assumptions before the window is mapped.
+  void centerNative() {
+    if (!isNative) return;
+    final gtk = LinuxGtkBindings.instance;
+    if (gtk == null) return;
+    try {
+      gtk.gtkWindowSetPosition(nativeHandle, kGtkWinPosCenter);
+    } catch (error, stackTrace) {
+      NativeCoreDiagnostics.report(
+        'LinuxWindowAdapter.centerNative',
+        error,
+        stackTrace,
+      );
+    }
+  }
+
+  void _applyWindowSize(LinuxGtkBindings gtk, int width, int height) {
+    if (width <= 0 || height <= 0) return;
+    if (gtk.gtkWidgetGetMapped(nativeHandle) == 0) {
+      gtk.gtkWindowSetDefaultSize(nativeHandle, width, height);
+      final gdkWin = gtk.gtkWidgetGetWindow(nativeHandle);
+      if (gdkWin != ffi.nullptr) {
+        gtk.gdkWindowResize(gdkWin, width, height);
+      }
+    }
+    gtk.gtkWindowResize(nativeHandle, width, height);
   }
 
   @override
@@ -641,7 +727,7 @@ class LinuxWindowAdapter implements WindowPlatformAdapter {
     if (gtk == null) return;
     try {
       gtk.gtkWindowDeiconify(nativeHandle);
-      _presentWindow(gtk);
+      _presentWindow(gtk, isShow: true);
     } catch (error, stackTrace) {
       NativeCoreDiagnostics.report(
         'LinuxWindowAdapter.restore',
@@ -657,7 +743,7 @@ class LinuxWindowAdapter implements WindowPlatformAdapter {
     final gtk = LinuxGtkBindings.instance;
     if (gtk == null) return;
     try {
-      _presentWindow(gtk);
+      _presentWindow(gtk, isShow: true);
     } catch (error, stackTrace) {
       NativeCoreDiagnostics.report(
         'LinuxWindowAdapter.show',
@@ -689,7 +775,7 @@ class LinuxWindowAdapter implements WindowPlatformAdapter {
     final gtk = LinuxGtkBindings.instance;
     if (gtk == null) return;
     try {
-      _presentWindow(gtk);
+      _presentWindow(gtk, isShow: false);
     } catch (error, stackTrace) {
       NativeCoreDiagnostics.report(
         'LinuxWindowAdapter.focus',
@@ -744,38 +830,64 @@ class LinuxWindowAdapter implements WindowPlatformAdapter {
   @override
   bool showSystemMenu(NativeOffset position) => false;
 
-  void _presentWindow(LinuxGtkBindings gtk) {
-    gtk.gtkWidgetShow(nativeHandle);
-    gtk.gtkWindowDeiconify(nativeHandle);
-
-    final gdkWin = gtk.gtkWidgetGetWindow(nativeHandle);
-    var timestamp = gtk.gtkGetCurrentEventTime();
-    if (timestamp == 0 && gdkWin != ffi.nullptr) {
-      // When triggered from a D-Bus StatusNotifierItem menu click, there is no
-      // active GDK event (`timestamp == 0`). On X11/XWayland, fetch a fresh X
-      // server timestamp so Mutter/KWin focus-stealing prevention does not
-      // reject `_NET_ACTIVE_WINDOW` due to a stale pre-hide user timestamp.
-      final x11GetType = gtk.gdkX11WindowGetType;
-      final x11ServerTime = gtk.gdkX11GetServerTime;
-      if (x11GetType != null && x11ServerTime != null) {
-        try {
-          if (gtk.gTypeCheckInstanceIsA(gdkWin, x11GetType()) != 0) {
-            timestamp = x11ServerTime(gdkWin);
-          }
-        } catch (error, stackTrace) {
-          NativeCoreDiagnostics.report(
-            'LinuxWindowAdapter.x11Timestamp',
-            error,
-            stackTrace,
-          );
-        }
-      }
+  bool _isX11GdkWindow(LinuxGtkBindings gtk, ffi.Pointer<ffi.Void> gdkWin) {
+    if (gdkWin == ffi.nullptr) return false;
+    final x11GetType = gtk.gdkX11WindowGetType;
+    if (x11GetType == null) return false;
+    try {
+      return gtk.gTypeCheckInstanceIsA(gdkWin, x11GetType()) != 0;
+    } catch (error, stackTrace) {
+      NativeCoreDiagnostics.report(
+        'LinuxWindowAdapter.isX11',
+        error,
+        stackTrace,
+      );
+      return false;
     }
+  }
 
-    gtk.gtkWindowPresentWithTime(nativeHandle, timestamp);
-    if (gdkWin != ffi.nullptr) {
-      gtk.gdkWindowShow(gdkWin);
-      gtk.gdkWindowFocus(gdkWin, timestamp);
+  void _presentWindow(LinuxGtkBindings gtk, {required bool isShow}) {
+    final gdkWin = gtk.gtkWidgetGetWindow(nativeHandle);
+    final isX11 = _isX11GdkWindow(gtk, gdkWin);
+    final isVisible = gtk.gtkWidgetGetVisible(nativeHandle) != 0;
+    final isMapped = gtk.gtkWidgetGetMapped(nativeHandle) != 0;
+
+    final action = resolveLinuxPresentAction(
+      isShow: isShow,
+      isX11: isX11,
+      isVisible: isVisible,
+      isMapped: isMapped,
+    );
+
+    switch (action) {
+      case LinuxPresentAction.noop:
+        return;
+      case LinuxPresentAction.widgetShowOnly:
+        gtk.gtkWindowDeiconify(nativeHandle);
+        gtk.gtkWidgetShow(nativeHandle);
+        return;
+      case LinuxPresentAction.presentWithTime:
+        gtk.gtkWindowDeiconify(nativeHandle);
+        var timestamp = gtk.gtkGetCurrentEventTime();
+        if (timestamp == 0 && isX11 && gdkWin != ffi.nullptr) {
+          // When triggered from a D-Bus StatusNotifierItem menu click, there is
+          // no active GDK event (`timestamp == 0`). On X11/XWayland, fetch a
+          // fresh X server timestamp so Mutter/KWin focus-stealing prevention
+          // does not reject `_NET_ACTIVE_WINDOW`.
+          final x11ServerTime = gtk.gdkX11GetServerTime;
+          if (x11ServerTime != null) {
+            try {
+              timestamp = x11ServerTime(gdkWin);
+            } catch (error, stackTrace) {
+              NativeCoreDiagnostics.report(
+                'LinuxWindowAdapter.x11Timestamp',
+                error,
+                stackTrace,
+              );
+            }
+          }
+        }
+        gtk.gtkWindowPresentWithTime(nativeHandle, timestamp);
     }
   }
 

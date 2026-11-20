@@ -14,6 +14,27 @@ import 'platform/window_adapter.dart';
 import 'platform/windows/windows_window_adapter.dart';
 import 'platform/windows/windows_window_finder.dart';
 
+/// Pure policy deciding whether Flutter's [WidgetsBindingObserver.didRequestAppExit]
+/// should be forwarded to [Window.dispatchCloseRequested].
+///
+/// * **Windows**: `true` — `Alt+F4` and taskbar "Close window" deliver
+///   `WM_CLOSE` through Flutter's `didRequestAppExit`.
+/// * **macOS**: `false` — window close buttons (`[X]` / `Cmd+W`) are already
+///   intercepted natively by `NSWindowDelegate.windowShouldClose:`, whereas
+///   `didRequestAppExit` signals an explicit OS-level application quit (Dock
+///   Quit / `Cmd+Q`) that must be allowed to terminate cleanly.
+/// * **Linux**: `false` — window close buttons and `Alt+F4` are intercepted
+///   natively by GTK's `delete-event` signal, whereas `didRequestAppExit`
+///   signals application termination.
+bool shouldForwardAppExitToWindowClose({
+  required bool isWindows,
+  required bool isMacOS,
+  required bool isLinux,
+}) {
+  if (isMacOS || isLinux) return false;
+  return isWindows;
+}
+
 /// Manages active desktop [Window] instances for the current process.
 class WindowManager {
   WindowManager._();
@@ -239,9 +260,16 @@ class Window with WidgetsBindingObserver implements WindowAdapterEventSink {
 
   @override
   Future<AppExitResponse> didRequestAppExit() async {
-    return dispatchCloseRequested()
-        ? AppExitResponse.exit
-        : AppExitResponse.cancel;
+    if (shouldForwardAppExitToWindowClose(
+      isWindows: Platform.isWindows,
+      isMacOS: Platform.isMacOS,
+      isLinux: Platform.isLinux,
+    )) {
+      return dispatchCloseRequested()
+          ? AppExitResponse.exit
+          : AppExitResponse.cancel;
+    }
+    return AppExitResponse.exit;
   }
 
   /// Registers a callback for window events and returns its [ListenerId].
@@ -403,6 +431,10 @@ class Window with WidgetsBindingObserver implements WindowAdapterEventSink {
 
   /// Centers the window within the primary display's usable work area.
   void center() {
+    if (_adapter case final LinuxWindowAdapter linux) {
+      linux.centerNative();
+      return;
+    }
     final current = bounds;
     final displays = DisplayManager.instance.getAll();
     if (displays.isNotEmpty) {

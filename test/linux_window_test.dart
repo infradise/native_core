@@ -84,6 +84,82 @@ void main() {
       },
     );
 
+    test(
+      'resolveLinuxPresentAction prevents unmapped Wayland present_with_time(0) while preserving X11 and mapped focus',
+      () {
+        // Wayland startup (before first-frame map): show() uses widgetShowOnly,
+        // immediate synchronous focus() becomes noop so Mutter never emits
+        // an unauthenticated "<App> is ready" attention notification.
+        expect(
+          resolveLinuxPresentAction(
+            isShow: true,
+            isX11: false,
+            isVisible: false,
+            isMapped: false,
+          ),
+          LinuxPresentAction.widgetShowOnly,
+        );
+        expect(
+          resolveLinuxPresentAction(
+            isShow: false,
+            isX11: false,
+            isVisible: true,
+            isMapped: false,
+          ),
+          LinuxPresentAction.noop,
+        );
+        // Wayland focus() on a hidden unmapped window still shows it.
+        expect(
+          resolveLinuxPresentAction(
+            isShow: false,
+            isX11: false,
+            isVisible: false,
+            isMapped: false,
+          ),
+          LinuxPresentAction.widgetShowOnly,
+        );
+        // Wayland already-mapped window uses gtk_window_present_with_time.
+        expect(
+          resolveLinuxPresentAction(
+            isShow: true,
+            isX11: false,
+            isVisible: true,
+            isMapped: true,
+          ),
+          LinuxPresentAction.presentWithTime,
+        );
+        expect(
+          resolveLinuxPresentAction(
+            isShow: false,
+            isX11: false,
+            isVisible: true,
+            isMapped: true,
+          ),
+          LinuxPresentAction.presentWithTime,
+        );
+        // X11 hidden show() maps via widgetShowOnly; focus() presents with
+        // fresh X11 server timestamp.
+        expect(
+          resolveLinuxPresentAction(
+            isShow: true,
+            isX11: true,
+            isVisible: false,
+            isMapped: false,
+          ),
+          LinuxPresentAction.widgetShowOnly,
+        );
+        expect(
+          resolveLinuxPresentAction(
+            isShow: false,
+            isX11: true,
+            isVisible: true,
+            isMapped: false,
+          ),
+          LinuxPresentAction.presentWithTime,
+        );
+      },
+    );
+
     test('Linux GTK helpers are safe no-ops on non-Linux hosts', () {
       if (Platform.isLinux) return;
       final fake = Window.fakeForTesting();

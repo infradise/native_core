@@ -6,6 +6,7 @@ import 'diagnostics.dart';
 import 'main_window.dart';
 import 'platform/linux/linux_headerbar_grab.dart';
 import 'platform/linux/linux_window_adapter.dart';
+import 'platform/macos/macos_appkit_bindings.dart';
 import 'platform/unix_single_instance.dart';
 import 'platform/windows/windows_single_instance.dart';
 import 'platform/windows/windows_win32_bindings.dart';
@@ -84,6 +85,11 @@ class Application {
 
     if (isPrimary) {
       _coordinatorsByToken[token] = coordinator;
+      if (Platform.isMacOS) {
+        MacOSAppLifecycleObserver.instance.registerWillTerminate(
+          releaseSingleInstanceSync,
+        );
+      }
       return true;
     }
 
@@ -102,6 +108,11 @@ class Application {
       if (coordinator != null) {
         await coordinator.release();
       }
+      if (_coordinatorsByToken.isEmpty && Platform.isMacOS) {
+        MacOSAppLifecycleObserver.instance.unregisterWillTerminate(
+          releaseSingleInstanceSync,
+        );
+      }
       return;
     }
 
@@ -109,8 +120,28 @@ class Application {
       _coordinatorsByToken.values,
     );
     _coordinatorsByToken.clear();
+    if (Platform.isMacOS) {
+      MacOSAppLifecycleObserver.instance.unregisterWillTerminate(
+        releaseSingleInstanceSync,
+      );
+    }
     for (final coordinator in active) {
       await coordinator.release();
+    }
+  }
+
+  /// Best-effort synchronous release of all held Unix single-instance sockets
+  /// during OS termination (`NSApplicationWillTerminateNotification` or
+  /// [quit]).
+  void releaseSingleInstanceSync() {
+    final active = List<SingleInstanceCoordinator>.of(
+      _coordinatorsByToken.values,
+    );
+    _coordinatorsByToken.clear();
+    for (final coordinator in active) {
+      if (coordinator is UnixSingleInstanceCoordinator) {
+        coordinator.releaseSync();
+      }
     }
   }
 
@@ -146,6 +177,7 @@ class Application {
   /// Terminates the native desktop application event loop and exits the process
   /// with [exitCode].
   void quit([int exitCode = 0]) {
+    releaseSingleInstanceSync();
     if (Platform.isLinux) {
       quitLinuxApplication();
     } else if (Platform.isWindows) {

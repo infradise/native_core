@@ -1,7 +1,16 @@
 ## 1.0.1
 
-* **Linux (`GDK3`)**: Attach the default `GdkSeat` pointer device via `gdk_event_set_device` to synthesized `GDK_BUTTON_RELEASE` events inside `releaseLinuxMouseButtonAfterGrab` before dispatching `gtk_widget_event`, eliminating `Gdk-CRITICAL: gdk_device_get_axis: assertion 'GDK_IS_DEVICE (device)' failed` warnings after interactive caption-bar window dragging on Linux GTK3/Wayland and X11.
-* Added deterministic unit tests and a live Linux `libgdk-3.so.0` FFI probe verifying `gdk_event_set_device` and `gdk_event_get_device` symbol resolution and lifecycle safety.
+OS-isolated window lifecycle, macOS Dock/close-button responsiveness, and Linux Wayland presentation & GDK3 pointer event fixes (with zero modifications to the Windows adapter).
+
+### macOS (`platform/macos/`)
+* **Immediate Close-to-Tray Response on Traffic-Light `[X]` Click**: Wake Flutter's macOS `CFRunLoop` / Dart microtask queue (`Timer.run` + `ensureVisualUpdate` / `scheduleFrame`) immediately inside `NativeCoreWindowDelegate.windowShouldClose:` when a close request is cancelled, so hiding the window no longer waits for the pointer to leave AppKit's red close button.
+* **Automatic Dock Running Indicator Policy (`Regular` ↔ `Accessory`)**: When `MacOSWindowAdapter.hide()` hides the last visible app window while an active `NSStatusItem` (`NSStatusBarWindow` with `isVisible == true`) is present, automatically switch `NSApplication` to `Accessory (1)` so the Dock dot disappears while the menu bar icon stays alive; restore `Regular (0)` before activation on `show()`, `focus()`, or native reopen (`NSWindowDidBecomeKeyNotification`).
+* **Clean Dock Quit / `Cmd+Q` Termination**: Stop forwarding `WidgetsBindingObserver.didRequestAppExit` to `WindowCloseRequestedEvent` on macOS and Linux (preserving Windows `WM_CLOSE` forwarding intact), and automatically release single-instance Unix sockets via `NSApplicationWillTerminateNotification` (`MacOSAppLifecycleObserver`) and `Application.quit()`.
+
+### Linux (`platform/linux/`)
+* **Wayland Unmapped Presentation & Mutter `"<App>" is ready` Fix**: Remove raw `gdk_window_show` and `gdk_window_focus` calls from `LinuxWindowAdapter._presentWindow`, and resolve X11 vs Wayland presentation via `resolveLinuxPresentAction` so unmapped Wayland startup/restore uses `gtk_window_deiconify` + `gtk_widget_show` without firing premature `gtk_window_present_with_time(0)`.
+* **GTK3 Pre-Map Geometry, Native Centering, Maximized State, and Close Wakeup**: Apply `gtk_window_set_default_size` + `gdk_window_resize` before map in `setSize()` / `bounds =`, delegate `Window.center()` to `gtk_window_set_position(GTK_WIN_POS_CENTER)`, check `GDK_WINDOW_STATE_MAXIMIZED` alongside `gtk_window_is_maximized`, and wake Flutter's event loop when `delete-event` cancels close.
+* **Synthesized `GDK_BUTTON_RELEASE` Pointer Device Binding**: Bind `gdk_event_set_device` and `gdk_event_get_device` from `libgdk-3.so.0` and attach the default `GdkSeat` pointer device inside `releaseLinuxMouseButtonAfterGrab` before dispatching `gtk_widget_event`, eliminating `Gdk-CRITICAL: gdk_device_get_axis: assertion 'GDK_IS_DEVICE (device)' failed` warnings after interactive caption-bar window dragging on Wayland and X11.
 
 ## 1.0.0
 
