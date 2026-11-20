@@ -124,6 +124,8 @@ class LinuxGtkBindings {
     required this.gdkWindowGetState,
     required this.gdkWindowResize,
     required this.gdkEventNew,
+    required this.gdkEventSetDevice,
+    required this.gdkEventGetDevice,
     required this.gdkEventFree,
     required this.gdkX11WindowGetType,
     required this.gdkX11GetServerTime,
@@ -279,6 +281,14 @@ class LinuxGtkBindings {
           ffi.Pointer<GdkEventButton> Function(ffi.Int32),
           ffi.Pointer<GdkEventButton> Function(int)
         >('gdk_event_new'),
+        gdkEventSetDevice: gdk.lookupFunction<
+          ffi.Void Function(ffi.Pointer<GdkEventButton>, ffi.Pointer<ffi.Void>),
+          void Function(ffi.Pointer<GdkEventButton>, ffi.Pointer<ffi.Void>)
+        >('gdk_event_set_device'),
+        gdkEventGetDevice: gdk.lookupFunction<
+          ffi.Pointer<ffi.Void> Function(ffi.Pointer<GdkEventButton>),
+          ffi.Pointer<ffi.Void> Function(ffi.Pointer<GdkEventButton>)
+        >('gdk_event_get_device'),
         gdkEventFree: gdk.lookupFunction<
           ffi.Void Function(ffi.Pointer<GdkEventButton>),
           void Function(ffi.Pointer<GdkEventButton>)
@@ -562,6 +572,14 @@ class LinuxGtkBindings {
 
   /// `gdk_event_new`.
   final ffi.Pointer<GdkEventButton> Function(int) gdkEventNew;
+
+  /// `gdk_event_set_device`.
+  final void Function(ffi.Pointer<GdkEventButton>, ffi.Pointer<ffi.Void>)
+  gdkEventSetDevice;
+
+  /// `gdk_event_get_device`.
+  final ffi.Pointer<ffi.Void> Function(ffi.Pointer<GdkEventButton>)
+  gdkEventGetDevice;
 
   /// `gdk_event_free`.
   final void Function(ffi.Pointer<GdkEventButton>) gdkEventFree;

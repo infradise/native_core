@@ -165,7 +165,95 @@ void main() {
       final fake = Window.fakeForTesting();
       expect(hideLinuxNativeTitleBar(fake), isFalse);
       expect(() => releaseLinuxMouseButtonAfterGrab(fake), returnsNormally);
+      expect(debugProbeLinuxSynthesizedButtonReleaseEvent(), isFalse);
       fake.dispose();
     });
+
+    test(
+      'attachLinuxEventPointerDevice binds the seat pointer via gdk_event_set_device',
+      () {
+        final calls = <String>[];
+        final attached = attachLinuxEventPointerDevice<String, String>(
+          event: 'button-release-event',
+          getDefaultDisplay: () {
+            calls.add('display');
+            return 'gdk-display';
+          },
+          getDefaultSeat: (display) {
+            calls.add('seat:$display');
+            return 'gdk-seat';
+          },
+          getSeatPointer: (seat) {
+            calls.add('pointer:$seat');
+            return 'gdk-pointer';
+          },
+          setEventDevice: (event, device) {
+            calls.add('set:$event:$device');
+          },
+          isNullPointer: (ptr) => ptr.isEmpty,
+        );
+
+        expect(attached, isTrue);
+        expect(
+          calls,
+          equals(<String>[
+            'display',
+            'seat:gdk-display',
+            'pointer:gdk-seat',
+            'set:button-release-event:gdk-pointer',
+          ]),
+        );
+      },
+    );
+
+    test(
+      'attachLinuxEventPointerDevice skips gdk_event_set_device when display, seat, or pointer is null',
+      () {
+        var setCalls = 0;
+
+        expect(
+          attachLinuxEventPointerDevice<String, String>(
+            event: 'event',
+            getDefaultDisplay: () => '',
+            getDefaultSeat: (_) => 'seat',
+            getSeatPointer: (_) => 'pointer',
+            setEventDevice: (_, _) => setCalls++,
+            isNullPointer: (ptr) => ptr.isEmpty,
+          ),
+          isFalse,
+        );
+        expect(
+          attachLinuxEventPointerDevice<String, String>(
+            event: 'event',
+            getDefaultDisplay: () => 'display',
+            getDefaultSeat: (_) => '',
+            getSeatPointer: (_) => 'pointer',
+            setEventDevice: (_, _) => setCalls++,
+            isNullPointer: (ptr) => ptr.isEmpty,
+          ),
+          isFalse,
+        );
+        expect(
+          attachLinuxEventPointerDevice<String, String>(
+            event: 'event',
+            getDefaultDisplay: () => 'display',
+            getDefaultSeat: (_) => 'seat',
+            getSeatPointer: (_) => '',
+            setEventDevice: (_, _) => setCalls++,
+            isNullPointer: (ptr) => ptr.isEmpty,
+          ),
+          isFalse,
+        );
+        expect(setCalls, equals(0));
+      },
+    );
+
+    test(
+      'live Linux GDK3 probe resolves gdk_event_set_device and gdk_event_get_device cleanly',
+      () {
+        if (!Platform.isLinux) return;
+        expect(debugProbeLinuxSynthesizedButtonReleaseEvent(), isTrue);
+      },
+    );
   });
 }
