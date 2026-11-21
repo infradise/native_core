@@ -14,7 +14,7 @@ export '../platform/linux/linux_window_adapter.dart'
         selectPrimaryLinuxToplevel;
 export '../platform/macos/macos_appkit_bindings.dart'
     show
-        debugRunMacOSWillTerminateObserverProbe,
+        debugHasMacOSAppLifecycleObserverClass,
         kNSApplicationActivationPolicyAccessory,
         kNSApplicationActivationPolicyProhibited,
         kNSApplicationActivationPolicyRegular;
@@ -29,7 +29,9 @@ export '../platform/macos/macos_window_adapter.dart'
 export '../platform/macos/macos_window_delegate.dart'
     show
         MacOSWindowCloseProbeResult,
+        MacOSWindowDetachProbeResult,
         debugHasMacOSReplaceMethodSymbol,
+        debugRunMacOSWindowDetachForAppExitProbe,
         debugRunMacOSWindowShouldCloseProbe;
 export '../platform/unix_single_instance.dart'
     show UnixSingleInstanceCoordinator, resolveUnixSingleInstanceSocketPath;

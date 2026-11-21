@@ -242,8 +242,8 @@ class UnixSingleInstanceCoordinator implements SingleInstanceCoordinator {
   }
 
   /// Synchronously unlinks the bound Unix domain socket file and initiates
-  /// server teardown for OS termination callbacks (such as macOS
-  /// `NSApplicationWillTerminateNotification`) where awaiting is impossible.
+  /// server teardown for immediate shutdown paths (such as `Application.quit`)
+  /// where awaiting is impossible.
   void releaseSync() {
     final server = _server;
     _server = null;

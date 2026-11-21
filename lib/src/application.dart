@@ -6,7 +6,6 @@ import 'diagnostics.dart';
 import 'main_window.dart';
 import 'platform/linux/linux_headerbar_grab.dart';
 import 'platform/linux/linux_window_adapter.dart';
-import 'platform/macos/macos_appkit_bindings.dart';
 import 'platform/unix_single_instance.dart';
 import 'platform/windows/windows_single_instance.dart';
 import 'platform/windows/windows_win32_bindings.dart';
@@ -85,11 +84,6 @@ class Application {
 
     if (isPrimary) {
       _coordinatorsByToken[token] = coordinator;
-      if (Platform.isMacOS) {
-        MacOSAppLifecycleObserver.instance.registerWillTerminate(
-          releaseSingleInstanceSync,
-        );
-      }
       return true;
     }
 
@@ -108,11 +102,6 @@ class Application {
       if (coordinator != null) {
         await coordinator.release();
       }
-      if (_coordinatorsByToken.isEmpty && Platform.isMacOS) {
-        MacOSAppLifecycleObserver.instance.unregisterWillTerminate(
-          releaseSingleInstanceSync,
-        );
-      }
       return;
     }
 
@@ -120,19 +109,19 @@ class Application {
       _coordinatorsByToken.values,
     );
     _coordinatorsByToken.clear();
-    if (Platform.isMacOS) {
-      MacOSAppLifecycleObserver.instance.unregisterWillTerminate(
-        releaseSingleInstanceSync,
-      );
-    }
     for (final coordinator in active) {
       await coordinator.release();
     }
   }
 
   /// Best-effort synchronous release of all held Unix single-instance sockets
-  /// during OS termination (`NSApplicationWillTerminateNotification` or
-  /// [quit]).
+  /// prior to immediate process termination (such as [quit]).
+  ///
+  /// For OS-initiated termination (such as macOS Dock Quit or `Cmd+Q`), the
+  /// kernel closes the listening socket descriptor on process exit and
+  /// `UnixSingleInstanceCoordinator` automatically cleans up and rebinds the
+  /// socket path on the next launch without registering any native
+  /// `NSApplicationWillTerminateNotification` FFI callback.
   void releaseSingleInstanceSync() {
     final active = List<SingleInstanceCoordinator>.of(
       _coordinatorsByToken.values,

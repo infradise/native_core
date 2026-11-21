@@ -1,3 +1,4 @@
+import 'dart:async' show Timer;
 import 'dart:ffi' as ffi;
 import 'dart:io';
 
@@ -288,6 +289,8 @@ class MacOSWindowAdapter implements WindowPlatformAdapter {
   @override
   bool get isNative => nativeHandle != ffi.nullptr;
 
+  WindowAdapterEventSink? _sink;
+  Timer? _reattachAfterCancelledExitTimer;
   bool _ownsDelegateProperty = false;
   bool _desiredVisible = true;
   bool _switchedToAccessoryOnHide = false;
@@ -301,6 +304,9 @@ class MacOSWindowAdapter implements WindowPlatformAdapter {
 
   @override
   void attach(WindowAdapterEventSink sink) {
+    _sink = sink;
+    _reattachAfterCancelledExitTimer?.cancel();
+    _reattachAfterCancelledExitTimer = null;
     if (!isNative) return;
     final mac = MacOSAppKitBindings.instance;
     if (mac == null) return;
@@ -310,6 +316,39 @@ class MacOSWindowAdapter implements WindowPlatformAdapter {
       sink: sink,
       onBecameKey: _handleWindowBecameKey,
     );
+  }
+
+  /// Detaches `NativeCoreWindowDelegate` from `NSWindow.delegate` and
+  /// `NSNotificationCenter` right before `Window.didRequestAppExit` returns
+  /// `AppExitResponse.exit`, ensuring no Dart `NativeCallable.isolateLocal`
+  /// delegate or notification observer remains reachable while
+  /// `-[NSApplication terminate:]` shuts down the Flutter engine.
+  ///
+  /// If another `WidgetsBindingObserver` cancels application exit and the Dart
+  /// isolate stays alive, the delegate automatically re-attaches after a short
+  /// grace delay so Close-to-Tray interception resumes seamlessly.
+  void detachForAppExit() {
+    _reattachAfterCancelledExitTimer?.cancel();
+    _reattachAfterCancelledExitTimer = null;
+    if (!isNative) return;
+    MacOSWindowDelegateRegistry.instance.detach(
+      mac: MacOSAppKitBindings.instance,
+      nsWindow: nativeHandle,
+      ownsDelegateProperty: _ownsDelegateProperty,
+    );
+    _ownsDelegateProperty = false;
+    final savedSink = _sink;
+    if (savedSink != null) {
+      _reattachAfterCancelledExitTimer = Timer(
+        const Duration(milliseconds: 250),
+        () {
+          _reattachAfterCancelledExitTimer = null;
+          if (_sink == savedSink && isNative) {
+            attach(savedSink);
+          }
+        },
+      );
+    }
   }
 
   void _handleWindowBecameKey() {
@@ -798,6 +837,8 @@ class MacOSWindowAdapter implements WindowPlatformAdapter {
 
   @override
   void destroyNativeWindow() {
+    _reattachAfterCancelledExitTimer?.cancel();
+    _reattachAfterCancelledExitTimer = null;
     if (!isNative) return;
     final mac = MacOSAppKitBindings.instance;
     if (mac == null) return;
@@ -887,6 +928,9 @@ class MacOSWindowAdapter implements WindowPlatformAdapter {
 
   @override
   void dispose() {
+    _reattachAfterCancelledExitTimer?.cancel();
+    _reattachAfterCancelledExitTimer = null;
+    _sink = null;
     if (!isNative) return;
     MacOSWindowDelegateRegistry.instance.detach(
       mac: MacOSAppKitBindings.instance,

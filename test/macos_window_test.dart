@@ -136,10 +136,33 @@ void main() {
     );
 
     test(
-      'live macOS NSApplicationWillTerminateNotification observer dispatches cleanup callbacks',
+      'Application.ensureSingleInstance does not register any NSApplicationWillTerminateNotification FFI observer on macOS',
+      () async {
+        if (!Platform.isMacOS) return;
+        final uniqueId =
+            'com.example.native_core.no_terminate_observer_${DateTime.now().microsecondsSinceEpoch}';
+        try {
+          final isPrimary = await Application.instance.ensureSingleInstance(
+            appId: uniqueId,
+            exitSecondaryProcess: false,
+          );
+          expect(isPrimary, isTrue);
+          expect(debugHasMacOSAppLifecycleObserverClass(), isFalse);
+        } finally {
+          await Application.instance.releaseSingleInstance(uniqueId);
+        }
+      },
+    );
+
+    test(
+      'live macOS NativeCoreWindowDelegate.detach unsubscribes NSNotificationCenter observer and clears close interception for safe app exit',
       () {
         if (!Platform.isMacOS) return;
-        expect(debugRunMacOSWillTerminateObserverProbe(), isTrue);
+        final probe = debugRunMacOSWindowDetachForAppExitProbe();
+        expect(probe, isNotNull);
+        expect(probe!.receivedNotificationBeforeDetach, isTrue);
+        expect(probe.receivedNotificationAfterDetach, isFalse);
+        expect(probe.windowShouldCloseAfterDetachReturnedTrue, isTrue);
       },
     );
   });

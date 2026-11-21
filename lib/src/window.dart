@@ -269,6 +269,9 @@ class Window with WidgetsBindingObserver implements WindowAdapterEventSink {
           ? AppExitResponse.exit
           : AppExitResponse.cancel;
     }
+    if (_adapter case final MacOSWindowAdapter mac) {
+      mac.detachForAppExit();
+    }
     return AppExitResponse.exit;
   }
 

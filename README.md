@@ -46,7 +46,7 @@ Zero-dependency desktop window, display, and single-instance lifecycle primitive
 
 ```yaml
 dependencies:
-  native_core: ^1.0.1
+  native_core: ^1.0.2
 ```
 
 ## Quick Start

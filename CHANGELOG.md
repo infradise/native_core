@@ -1,3 +1,11 @@
+## 1.0.2
+
+macOS termination crash (`SIGSEGV`) fix during Dock Quit / `Cmd+Q` (with zero modifications to the Linux and Windows adapters).
+
+### macOS (`platform/macos/`)
+* **Eliminate `EXC_BAD_ACCESS (SIGSEGV)` in `-[NSApplication terminate:]`**: Remove `MacOSAppLifecycleObserver` (`NativeCoreAppLifecycleObserver`) from `NSApplicationWillTerminateNotification`. Under Flutter macOS, `-[FlutterEngine applicationWillTerminate:]` runs first and destroys the Dart isolate (unmapping all `ffi.NativeCallable.isolateLocal` trampolines) before subsequent `NSNotificationCenter` observers fire, which caused a deterministic instruction abort on Dock Quit / `Cmd+Q`. Single-instance Unix sockets are released by the kernel on process exit and automatically recovered on the next launch via `UnixSingleInstanceCoordinator` (and unlinked synchronously on explicit `Application.quit()`).
+* **Pre-Termination `NativeCoreWindowDelegate` Detachment**: Detach `NativeCoreWindowDelegate` from `NSWindow.delegate` and `NSNotificationCenter` (`MacOSWindowAdapter.detachForAppExit`) inside `Window.didRequestAppExit()` before returning `AppExitResponse.exit`, with automatic re-attachment if another `WidgetsBindingObserver` cancels application exit.
+
 ## 1.0.1
 
 OS-isolated window lifecycle, macOS Dock/close-button responsiveness, and Linux Wayland presentation & GDK3 pointer event fixes (with zero modifications to the Windows adapter).

@@ -179,6 +179,149 @@ MacOSWindowCloseProbeResult? debugRunMacOSWindowShouldCloseProbe() {
   }
 }
 
+/// Result of [debugRunMacOSWindowDetachForAppExitProbe].
+class MacOSWindowDetachProbeResult {
+  /// Creates a [MacOSWindowDetachProbeResult].
+  const MacOSWindowDetachProbeResult({
+    required this.receivedNotificationBeforeDetach,
+    required this.receivedNotificationAfterDetach,
+    required this.windowShouldCloseAfterDetachReturnedTrue,
+  });
+
+  /// Whether posting `NSWindowDidBecomeKeyNotification` through
+  /// `NSNotificationCenter.defaultCenter` fired `onBecameKey` while attached.
+  final bool receivedNotificationBeforeDetach;
+
+  /// Whether posting `NSWindowDidBecomeKeyNotification` fired `onBecameKey`
+  /// after [MacOSWindowDelegateRegistry.detach] (must be `false`).
+  final bool receivedNotificationAfterDetach;
+
+  /// Whether `windowShouldClose:` returns `YES` after detach (must be `true`).
+  final bool windowShouldCloseAfterDetachReturnedTrue;
+}
+
+/// Live macOS FFI probe verifying that [MacOSWindowDelegateRegistry.detach]
+/// unsubscribes `NativeCoreWindowDelegate` from `NSNotificationCenter` and
+/// clears close interception before `-[NSApplication terminate:]` shuts down
+/// the Dart isolate.
+MacOSWindowDetachProbeResult? debugRunMacOSWindowDetachForAppExitProbe() {
+  if (!Platform.isMacOS) return null;
+  final mac = MacOSAppKitBindings.instance;
+  if (mac == null) return null;
+
+  final nsObjectCls = mac.getClass('NSObject');
+  final centerCls = mac.getClass('NSNotificationCenter');
+  if (nsObjectCls == ffi.nullptr || centerCls == ffi.nullptr) return null;
+
+  final center = mac.sendId(centerCls, mac.sel('defaultCenter'));
+  final noteName = mac.nsString('NSWindowDidBecomeKeyNotification');
+  if (center == ffi.nullptr || noteName == ffi.nullptr) return null;
+
+  final sentinelWindow = mac.sendId(
+    mac.sendId(nsObjectCls, mac.sel('alloc')),
+    mac.sel('init'),
+  );
+  if (sentinelWindow == ffi.nullptr) return null;
+
+  final registry = MacOSWindowDelegateRegistry.instance;
+  final sink = _ProbeEventSink(allowClose: false);
+  var becameKeyCount = 0;
+
+  final postNotification =
+      ffi.DynamicLibrary.open('/usr/lib/libobjc.A.dylib')
+          .lookup<ffi.NativeFunction<ffi.Void Function()>>('objc_msgSend')
+          .cast<
+            ffi.NativeFunction<
+              ffi.Void Function(
+                ffi.Pointer<ffi.Void>,
+                ffi.Pointer<ffi.Void>,
+                ffi.Pointer<ffi.Void>,
+                ffi.Pointer<ffi.Void>,
+              )
+            >
+          >()
+          .asFunction<
+            void Function(
+              ffi.Pointer<ffi.Void>,
+              ffi.Pointer<ffi.Void>,
+              ffi.Pointer<ffi.Void>,
+              ffi.Pointer<ffi.Void>,
+            )
+          >();
+
+  final sendBoolId =
+      ffi.DynamicLibrary.open('/usr/lib/libobjc.A.dylib')
+          .lookup<ffi.NativeFunction<ffi.Void Function()>>('objc_msgSend')
+          .cast<
+            ffi.NativeFunction<
+              ffi.Bool Function(
+                ffi.Pointer<ffi.Void>,
+                ffi.Pointer<ffi.Void>,
+                ffi.Pointer<ffi.Void>,
+              )
+            >
+          >()
+          .asFunction<
+            bool Function(
+              ffi.Pointer<ffi.Void>,
+              ffi.Pointer<ffi.Void>,
+              ffi.Pointer<ffi.Void>,
+            )
+          >();
+
+  try {
+    final delegate = registry._ensureDelegateInstance(mac);
+    if (delegate == ffi.nullptr) return null;
+    registry._entries[sentinelWindow.address] = (
+      window: sentinelWindow,
+      sink: sink,
+      onBecameKey: () => becameKeyCount++,
+    );
+    registry._registerBecomeKeyObserver(mac, delegate, sentinelWindow);
+
+    postNotification(
+      center,
+      mac.sel('postNotificationName:object:'),
+      noteName,
+      sentinelWindow,
+    );
+    final beforeDetach = becameKeyCount == 1;
+
+    registry.detach(
+      mac: mac,
+      nsWindow: sentinelWindow,
+      ownsDelegateProperty: false,
+    );
+
+    becameKeyCount = 0;
+    postNotification(
+      center,
+      mac.sel('postNotificationName:object:'),
+      noteName,
+      sentinelWindow,
+    );
+    final afterDetach = becameKeyCount > 0;
+    final allowCloseAfterDetach = sendBoolId(
+      delegate,
+      mac.sel('windowShouldClose:'),
+      sentinelWindow,
+    );
+
+    return MacOSWindowDetachProbeResult(
+      receivedNotificationBeforeDetach: beforeDetach,
+      receivedNotificationAfterDetach: afterDetach,
+      windowShouldCloseAfterDetachReturnedTrue: allowCloseAfterDetach,
+    );
+  } finally {
+    registry.detach(
+      mac: mac,
+      nsWindow: sentinelWindow,
+      ownsDelegateProperty: false,
+    );
+    mac.sendVoid(sentinelWindow, mac.sel('release'));
+  }
+}
+
 /// Manages the Objective-C `NativeCoreWindowDelegate` class and routes
 /// `windowShouldClose:`, `windowDidMove:`, and
 /// `NSWindowDidBecomeKeyNotification` callbacks by `NSWindow*` address.

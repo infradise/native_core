@@ -780,167 +780,17 @@ class MacOSAppKitBindings {
   }
 }
 
-/// Observes `NSApplicationWillTerminateNotification` on macOS using a
-/// Hot-Restart-safe Objective-C observer class (`NativeCoreAppLifecycleObserver`)
-/// so `native_core` automatically releases single-instance Unix sockets when
-/// terminated via Dock Quit or `Cmd+Q`.
-class MacOSAppLifecycleObserver {
-  MacOSAppLifecycleObserver._();
-
-  /// Process-wide singleton observer.
-  static final MacOSAppLifecycleObserver instance =
-      MacOSAppLifecycleObserver._();
-
-  final Set<void Function()> _willTerminateCallbacks = <void Function()>{};
-
-  ffi.Pointer<ffi.Void>? _observerInstance;
-  bool _registeredWithCenter = false;
-  ffi.NativeCallable<
-    ffi.Void Function(
-      ffi.Pointer<ffi.Void>,
-      ffi.Pointer<ffi.Void>,
-      ffi.Pointer<ffi.Void>,
-    )
-  >?
-  _willTerminateCallable;
-
-  /// Registers [callback] to run synchronously when macOS posts
-  /// `NSApplicationWillTerminateNotification`.
-  bool registerWillTerminate(void Function() callback) {
-    if (!Platform.isMacOS) return false;
-    _willTerminateCallbacks.add(callback);
-    return _ensureRegistered();
-  }
-
-  /// Removes a previously registered [callback].
-  void unregisterWillTerminate(void Function() callback) {
-    _willTerminateCallbacks.remove(callback);
-  }
-
-  bool _ensureRegistered() {
-    final mac = MacOSAppKitBindings.instance;
-    if (mac == null) return false;
-    try {
-      final observer = _ensureObserverInstance(mac);
-      if (observer == ffi.nullptr) return false;
-      if (_registeredWithCenter) return true;
-
-      final centerCls = mac.getClass('NSNotificationCenter');
-      if (centerCls == ffi.nullptr) return false;
-      final defaultCenter = mac.sendId(centerCls, mac.sel('defaultCenter'));
-      if (defaultCenter == ffi.nullptr) return false;
-      final noteName = mac.nsString('NSApplicationWillTerminateNotification');
-      if (noteName == ffi.nullptr) return false;
-
-      mac.sendVoidId4(
-        defaultCenter,
-        mac.sel('addObserver:selector:name:object:'),
-        observer,
-        mac.sel('onApplicationWillTerminate:'),
-        noteName,
-        ffi.nullptr,
-      );
-      _registeredWithCenter = true;
-      return true;
-    } catch (error, stackTrace) {
-      NativeCoreDiagnostics.report(
-        'MacOSAppLifecycleObserver.register',
-        error,
-        stackTrace,
-      );
-      return false;
-    }
-  }
-
-  ffi.Pointer<ffi.Void> _ensureObserverInstance(MacOSAppKitBindings mac) {
-    final existing = _observerInstance;
-    if (existing != null && existing != ffi.nullptr) return existing;
-
-    _willTerminateCallable ??= ffi.NativeCallable<
-      ffi.Void Function(
-        ffi.Pointer<ffi.Void>,
-        ffi.Pointer<ffi.Void>,
-        ffi.Pointer<ffi.Void>,
-      )
-    >.isolateLocal(_onWillTerminate);
-
-    final actionSel = mac.sel('onApplicationWillTerminate:');
-    var cls = mac.getClass('NativeCoreAppLifecycleObserver');
-    if (cls == ffi.nullptr) {
-      final nsObject = mac.getClass('NSObject');
-      cls = NativeMemory.withUtf8CString(
-        'NativeCoreAppLifecycleObserver',
-        (name) => mac.allocateClassPair(nsObject, name, 0),
-      );
-      NativeMemory.withUtf8CString('v@:@', (types) {
-        mac.addMethod(
-          cls,
-          actionSel,
-          _willTerminateCallable!.nativeFunction.cast(),
-          types,
-        );
-      });
-      mac.registerClassPair(cls);
-    } else {
-      NativeMemory.withUtf8CString('v@:@', (types) {
-        mac.replaceMethod(
-          cls,
-          actionSel,
-          _willTerminateCallable!.nativeFunction.cast(),
-          types,
-        );
-      });
-    }
-
-    return _observerInstance = mac.sendId(
-      mac.sendId(cls, mac.sel('alloc')),
-      mac.sel('init'),
-    );
-  }
-
-  static void _onWillTerminate(
-    ffi.Pointer<ffi.Void> self,
-    ffi.Pointer<ffi.Void> cmd,
-    ffi.Pointer<ffi.Void> notification,
-  ) {
-    final snapshot = List<void Function()>.of(instance._willTerminateCallbacks);
-    for (final callback in snapshot) {
-      try {
-        callback();
-      } catch (error, stackTrace) {
-        NativeCoreDiagnostics.report(
-          'MacOSAppLifecycleObserver.willTerminate',
-          error,
-          stackTrace,
-        );
-      }
-    }
-  }
-}
-
-/// Live macOS FFI probe verifying that `NativeCoreAppLifecycleObserver`
-/// registers on `NSNotificationCenter.defaultCenter` and dispatches registered
-/// termination callbacks through Objective-C `objc_msgSend`.
-bool debugRunMacOSWillTerminateObserverProbe() {
+/// Returns whether the deprecated `NativeCoreAppLifecycleObserver` Objective-C
+/// class exists in the current process (must always be `false`).
+///
+/// Registering a Dart `ffi.NativeCallable.isolateLocal` callback on
+/// `NSApplicationWillTerminateNotification` is unsafe under Flutter macOS
+/// because `-[FlutterEngine applicationWillTerminate:]` shuts down the Dart
+/// isolate and unmaps FFI trampolines first, causing `SIGSEGV` when
+/// `NSNotificationCenter` invokes later Dart observers.
+bool debugHasMacOSAppLifecycleObserverClass() {
   if (!Platform.isMacOS) return false;
   final mac = MacOSAppKitBindings.instance;
   if (mac == null) return false;
-
-  var invoked = false;
-  void onTerminate() {
-    invoked = true;
-  }
-
-  final observer = MacOSAppLifecycleObserver.instance;
-  final registered = observer.registerWillTerminate(onTerminate);
-  try {
-    final target = observer._observerInstance;
-    if (!registered || target == null || target == ffi.nullptr) {
-      return false;
-    }
-    mac.sendVoidId(target, mac.sel('onApplicationWillTerminate:'), ffi.nullptr);
-    return invoked;
-  } finally {
-    observer.unregisterWillTerminate(onTerminate);
-  }
+  return mac.getClass('NativeCoreAppLifecycleObserver') != ffi.nullptr;
 }
